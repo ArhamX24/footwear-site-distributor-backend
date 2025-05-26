@@ -1,5 +1,5 @@
 import categoryModel from "../../Models/Categories.model.js";
-import dealsModel from "../../Models/Deals.Model.js";
+import dealsModel from "../../Models/Deals.model.js";
 import productModel from "../../Models/Product.model.js";
 import purchaseProductModel from "../../Models/Purchasedproduct.model.js";
 import Variants from "../../Models/Variants.Model.js";
@@ -7,7 +7,6 @@ import { uploadOnCloudinary } from "../../Utils/cloudinary.js";
 import statusCodes from "../../Utils/statuscodes.js";
 import zod from 'zod';
 
-const imageExtensionRegex = /\.(jpe?g|png)$/i;
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 
 const productValidationSchema = zod.object({
