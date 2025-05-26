@@ -4,7 +4,7 @@ import statusCodes from "../../Utils/statuscodes.js"
 import zod from 'zod'
 import bcrypt from "bcrypt"
 import productModel from "../../Models/Product.model.js"
-import dealsModel from "../../Models/Deals.Model.js"
+import dealsModel from "../../Models/Deals.model.js"
 import Variants from "../../Models/Variants.Model.js"
 import generateOrderPerformaPDF from "../../Utils/orderPerformaGenerator.js"
 import purchaseProductModel from "../../Models/Purchasedproduct.model.js"
