@@ -3,7 +3,6 @@ import dealsModel from "../../Models/Deals.Model.js";
 import productModel from "../../Models/Product.model.js";
 import purchaseProductModel from "../../Models/Purchasedproduct.model.js";
 import Variants from "../../Models/Variants.Model.js";
-
 import { uploadOnCloudinary } from "../../Utils/cloudinary.js";
 import statusCodes from "../../Utils/statuscodes.js";
 import zod from 'zod';
