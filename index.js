@@ -13,7 +13,7 @@ server.use(express.json())
 server.use(express.urlencoded({extended: true}))
 server.use(cookieParser())
 server.use(cors({
-    origin: "http://localhost:5173",
+    origin: "https://pinkey-demo.netlify.app",
     credentials: true
 }))
 
