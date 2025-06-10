@@ -5,7 +5,7 @@ let {model, Schema} = mongoose
 const productSchema = new Schema({
   articleName: { type: String},
   price: { type: Number},
-  category: {type: String},
+  gender: {type: String},
   type:{type: String},
   variants:[{type: String, default: ""}],
   colors: [{ type: String}],

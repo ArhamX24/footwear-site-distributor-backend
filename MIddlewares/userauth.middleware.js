@@ -1,22 +1,23 @@
 import userModel from "../Models/distributor.model.js";
 import jwt from 'jsonwebtoken'
 import statusCodes from "../Utils/statuscodes.js";
+import mongoose from "mongoose";
 
 const userAuth = async (req,res,next) => {
     try {
-        let token = req?.cookies?.Token
+        let token = req?.cookies?.accessToken
 
         if(!token){
             return res.status(statusCodes.unauthorized).send({result: false, message: "Unauthorized"})
         }
 
-        let verifyToken = jwt.verify(token, process.env.JWT_SECRET)
+        let verifyToken = jwt.verify(token, process.env.ACCESS_JWT_SECRET)
 
         if(!verifyToken){
-                return res.status(statusCodes.unauthorized).send({result: false, message: "Invalid Token"})
+            return res.status(statusCodes.unauthorized).send({result: false, message: "Invalid Token"})
         }
 
-        let distributor = await userModel.findOne({phoneNo: verifyToken.phoneNo})
+        let distributor = await userModel.findOne({_id: verifyToken._id}).select("-refreshToken")
 
         if(distributor.role !== 'distributor'){
             return res.status(statusCodes.unauthorized).send({result: false, message: "Unauthorized"})

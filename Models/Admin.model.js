@@ -4,12 +4,10 @@ import bcrypt from "bcrypt"
 let {model, Schema} = mongoose
 
 let AdminSchema = new Schema({
-    firstname: {type: String},
-    lastname: {type: String},
-    email: {type: String, required: true, unique: true},
     phoneNo: {type: String, required: true, unique: true},
     password: {type: String, required: true},
-    role: {type: String, required: true}
+    role: {type: String, default: 'admin'},
+    refreshToken: {type: String}
 })
 
 AdminSchema.pre("save", async function (next) {

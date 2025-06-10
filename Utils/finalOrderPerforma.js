@@ -1,4 +1,4 @@
-import PDFDocument from "pdfkit"
+import PDFDocument from "pdfkit";
 
 /**
  * Generates an Order Performa PDF based on the provided order data.
@@ -7,13 +7,14 @@ import PDFDocument from "pdfkit"
  * @param {Object} order - The order object containing order details.
  * @param {import("express").Response} res - The Express response object.
  */
-const generateOrderPerformaPDF = (order, res) => {
+const finalOrderPerforma = (order, res) => {
+
+  console.log(order)
       
   // Create a new PDF document with some margins.
   const doc = new PDFDocument({ margin: 50 });
 
   // Set headers so that the PDF is served as an attachment.
-  res.setHeader("Content-Disposition", `attachment; filename="order_performa_${order._id}.pdf"`);
   res.setHeader("Content-Type", "application/pdf");
 
   // Pipe PDF document to the response.
@@ -33,11 +34,9 @@ const generateOrderPerformaPDF = (order, res) => {
   doc.moveDown();
 
   // --- Table Header ---
-// Define the starting vertical position of the table
-// Define the starting vertical position of the table
-const tableTop = 180;
+  const tableTop = 180;
 
-// Adjusted column positions & widths for proper alignment
+  // Adjusted column positions & widths for proper alignment
 const itemX = 50, itemWidth = 80;
 const variantX = 140, variantWidth = 80;
 const colourX = 230, colourWidth = 80;
@@ -46,6 +45,7 @@ const totalCartonsX = 390, totalCartonsWidth = 60;
 const rateX = 460, rateWidth = 60; // Shrunk width
 const totalX = 520, totalWidth = 70; // Adjusted to prevent overflow
 
+  // Draw the header row using bold font
 doc.font("Helvetica-Bold")
   .text("Article Name", itemX, tableTop, { width: itemWidth })
   .text("Variant", variantX, tableTop, { width: variantWidth })
@@ -55,12 +55,12 @@ doc.font("Helvetica-Bold")
   .text("Rate per C/s", rateX, tableTop, { width: rateWidth, align: "right" })
   .text("Total", totalX, tableTop, { width: totalWidth, align: "right" });
 
-// Draw a horizontal line under the header
+  // Draw a horizontal line under the header
 doc.moveTo(itemX, tableTop + 20).lineTo(totalX + totalWidth, tableTop + 20).stroke();
 
-// --- Table Rows ---
-doc.font("Helvetica");
-let position = tableTop + 30;
+  // --- Table Rows ---
+  doc.font("Helvetica");
+  let position = tableTop + 30;
 
 order.items.forEach((item, index) => {
   const total = item.totalCartons * item.singlePrice;
@@ -77,28 +77,14 @@ order.items.forEach((item, index) => {
 
   position += 25;
 });
-
-// Ensure document is properly finalized
-// doc.end();
-
-
   // --- Order Total ---
   const orderTotal = order.items.reduce((sum, item) => sum + (item.totalCartons * item.singlePrice), 0);
   doc.font("Helvetica-Bold")
-    .text("Total:", 300, position + 20, { width: 90, align: "right" })
-    .text(`₹${orderTotal.toFixed(2)}`, 400, position + 20, { width: 90, align: "right" });
-
-  // --- Footer ---
-  doc
-    .fontSize(10)
-    .font("Helvetica")
-    .text("Thank you for your order!", 50, 700, {
-      align: "center",
-      width: 500,
-    });
+      .text("Total:", 300, position + 20, { width: 90, align: "right" })
+      .text(`\u20B9${orderTotal.toFixed(2)}`, 400, position + 20, { width: 90, align: "right" });
 
   // Finalize the PDF and end the stream.
   doc.end();
 };
 
-export default generateOrderPerformaPDF
+export default finalOrderPerforma;

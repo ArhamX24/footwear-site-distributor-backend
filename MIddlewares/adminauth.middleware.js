@@ -4,28 +4,28 @@ import statusCodes from "../Utils/statuscodes.js"
 
 const adminAuth = async (req,res,next) => {
     try {
-        let token = req?.cookies?.Token
+        let token = req?.cookies?.accessToken;
         
         if(!token){
-            return res.status(statusCodes.unauthorized).send({result: false, message: "Unauthorized"})
+            return res.status(statusCodes.unauthorized).send({result: false, message: "Unauthorized"});
         }
 
-        let verifyToken = jwt.verify(token, process.env.JWT_SECRET)
+        let verifyToken = jwt.verify(token, process.env.ACCESS_JWT_SECRET);
 
         if(!verifyToken){
-            return res.status(statusCodes.unauthorized).send({result: false, message: "Invalid Token"})
+            return res.status(statusCodes.unauthorized).send({result: false, message: "Invalid Token"});
         }
 
-        let admin = await AdminModel.findOne({email: verifyToken.email})
+        let admin = await AdminModel.findOne({_id: verifyToken._id}).select("-refreshToken");
 
         if(admin.role !== "admin"){
-            return res.status(statusCodes.unauthorized).send({result: false, message: "Unauthorized"})
+            return res.status(statusCodes.unauthorized).send({result: false, message: "Unauthorized"});
         }
 
-        req.admin = admin
-        next()
+        req.admin = admin;
+        next();
     } catch (error) {
-        return res.status(statusCodes.serverError).send({result: false, message: error.message})
+        return res.status(statusCodes.serverError).send({result: false, message: error.message, error: "in adminAuth"});
     }
 }
 

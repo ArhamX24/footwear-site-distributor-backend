@@ -64,9 +64,25 @@ const login = async (req,res) => {
             return res.status(statusCodes.badRequest).send({result: false, message: "Incorrect Password"});
         }
 
-        let token = jwt.sign({phoneNo: phoneNo, password: password}, process.env.JWT_SECRET, {expiresIn: "7d"});
-
-        return res.status(statusCodes.success).cookie("Token", token, cookieOption).send({result: true, message: "Login Success"});
+        const accessToken = jwt.sign({
+                    _id: distributorInDb._id, role: "distributor"}
+                    ,process.env.ACCESS_JWT_SECRET, 
+                    {expiresIn: process.env.ACCESS_JWT_EXPIRY
+              })
+        
+        const refreshToken = jwt.sign({
+                _id: distributorInDb._id,
+                role: "distributor"
+                },process.env.REFRESH_JWT_SECRET,
+                {expiresIn: process.env.REFRESH_JWT_EXPIRY}
+              )
+        
+          await userModel.updateOne(
+              { _id: distributorInDb._id}, 
+              { $set: { refreshToken: refreshToken }}
+          );
+        
+      return res.status(statusCodes.success).cookie("accessToken", accessToken, cookieOption).cookie("refreshToken", refreshToken, cookieOption).send({result: true, message: "Login Success", role: "distributor"});
 
     } catch (error) {
         return res.status(statusCodes.serverError).send({result: false, message: "Error in Logging In. Please Try Again Later"});
@@ -77,11 +93,9 @@ const getDistributor = async (req,res) => {
   try {
     res.status(statusCodes.success).send({result: true, userdata: req?.distributor})
   } catch (error) {
-    console.log(error);
+    return res.status(500).send({result: false, message: "Error Getting Distributor"})
   }
 }
-
-
 
 const purchaseProduct = async (req,res) => {
    try {
@@ -95,7 +109,6 @@ const purchaseProduct = async (req,res) => {
     const orders = req?.body.items;
     const orderDate = req?.body.orderDate
   
-
     if (!orders || !Array.isArray(orders) || orders.length === 0) {
       return res.status(400).json({ message: "No orders provided" });
     }
@@ -109,12 +122,14 @@ const purchaseProduct = async (req,res) => {
       colors: order.colors,
       sizes: order.sizes,
       price: order.price,
+      variant: order.variants[0],
+      singlePrice: order.singlePrice
     }));
 
     // Create and save the purchase order to the database
     const newPurchaseOrder = await purchaseProductModel.create({
       distributorId: distributor._id,
-      orderId: new mongoose.Types.ObjectId(),                            // your generated orderId
+      orderId: new mongoose.Types.ObjectId(), // your generated orderId
       orderDate: orderDate,
       billNo: distributor.billNo,           // from distributor details
       partyName: distributor.partyName,     // from distributor details
@@ -132,11 +147,9 @@ const purchaseProduct = async (req,res) => {
       downloadUrl: `http://localhost:8080/api/v1/distributor/orders/download-performa/${newPurchaseOrder._id}`,
     });
   } catch (error) {
-    console.error(error)
     return res.status(500).json({
       success: false,
       message: "Error while placing order. Please try again later.",
-      error: error.message,
     });
   }
 }
@@ -159,50 +172,134 @@ try {
   }
 }
 
-const getAllProdcuts = async (req,res) => {
+const getAllProducts = async (req, res) => {
+  try {
+    // Destructure pagination and search params.
+    let { page = 1, limit = 10, search = "" } = req.query;
+    // Get the filters as received (they could be JSON strings).
+    let { filterName = "[]", filterOption = "[]" } = req.query;
+
+    // Parse JSON filter values; if parsing fails, use empty arrays.
     try {
-      const { page = 1, limit = 10 , search = ""} = req.query; // Default page=1, limit=10
-      const skip = (page - 1) * limit;
-
-      let query = {};
-        if (search) {
-        const searchTerms = search.split(" "); // Split search by space
-        query = {
-          $and: searchTerms.map((term) => ({
-          $or: [
-            { articleName: { $regex: term, $options: "i" } },  // Match product name
-            { category: { $regex: term, $options: "i" } }, // Match gender
-            { colors: {$regex: term, $options: "i"}},
-            { sizes: {$regex: term, $options: "i"}},
-            { type : { $regex: term, $options: "i" } }, // Match type
-            { variants : { $regex: term, $options: "i" } }, // Match variant
-          ],
-        })),
-      };
-  } 
-
-      const totalProducts = await productModel.countDocuments(query); // Total filtered products
-      const products = await productModel.find(query).skip(skip).limit(Number(limit));
-
-      const totalArticles = await productModel.find({})
-
-      if(!products){
-          return res.status(statusCodes.success).send({result: true, message: "Products Not Added Or Empty"})
-      }
-        return res.status(statusCodes.success).send({result: true, message: "Found All Products", data: products, totalPages: Math.ceil(totalProducts / limit), currentPage: Number(page) , total: totalArticles})
+      filterName = JSON.parse(filterName);
+      filterOption = JSON.parse(filterOption);
     } catch (error) {
-        return res.status(statusCodes.serverError).send({result: false, message: "Error in Deleting Product. Please Try Again Later"})
+      filterName = [];
+      filterOption = [];
     }
+
+    const skip = (page - 1) * limit;
+    let query = {};
+
+    // 🔹 Searching Logic (handles multi-word search properly)
+    if (search) {
+      const searchTerms = search.split(" ");
+      query.$and = searchTerms.map((term) => ({
+        $or: [
+          { articleName: { $regex: term, $options: "i" } },
+          { category: { $regex: term, $options: "i" } },
+          { colors: { $regex: term, $options: "i" } },
+          { sizes: { $regex: term, $options: "i" } },
+          { type: { $regex: term, $options: "i" } },
+          { variants: { $regex: term, $options: "i" } },
+        ],
+      }));
+    }
+
+    // 🔹 Handling Multiple Filters Correctly
+    if (
+      Array.isArray(filterName) &&
+      Array.isArray(filterOption) &&
+      filterName.length === filterOption.length
+    ) {
+      filterName.forEach((name, index) => {
+        if (!query.$and) query.$and = [];
+
+        // If the user has applied the price filter, handle it separately.
+       if (name === "price") {
+  // Extract the price value (if it's stored as an array, get its first element)
+  let priceRange = filterOption[index];
+  if (Array.isArray(priceRange)) {
+    priceRange = priceRange[0];
+  }
+  priceRange = priceRange.trim();
+
+  switch (priceRange) {
+    case "Under ₹100":
+      query.$and.push({ price: { $lt: 100 } });
+      break;
+    case "₹100 - ₹200":
+      query.$and.push({ price: { $gte: 100, $lte: 200 } });
+      break;
+    case "₹200 - ₹300":
+      query.$and.push({ price: { $gte: 200, $lte: 300 } });
+      break;
+    case "Above ₹300":
+      query.$and.push({ price: { $gt: 300 } });
+      break;
+    default:
+      break;
+  }
 }
+        // For fields such as 'colors' and 'variants' (stored as arrays in our schema), use the $in operator.
+        else if (["colors", "variants"].includes(name)) {
+          query.$and.push({
+            [name]: {
+              $in: Array.isArray(filterOption[index])
+                ? filterOption[index]
+                : [filterOption[index]],
+            },
+          });
+        }
+        // For other fields do a direct match.
+        else {
+          query.$and.push({
+            [name]: filterOption[index],
+          });
+        }
+      });
+    }
+
+    // 🔹 Fetching Products
+    const totalProducts = await productModel.countDocuments(query);
+    // We add .sort({price: 1}) here to sort the products in ascending order by price.
+    const products = await productModel
+      .find(query)
+      .sort({ price: 1 })
+      .skip(skip)
+      .limit(Number(limit));
+
+    if (!products || products.length === 0) {
+      return res.status(statusCodes.success).send({
+        result: false,
+        message: "Products Not Added Or Empty",
+        data: null 
+      });
+    }
+
+    return res.status(statusCodes.success).send({
+      result: true,
+      message: "Found All Products",
+      data: products,
+      totalPages: Math.ceil(totalProducts / limit),
+      currentPage: Number(page),
+    });
+  } catch (error) {
+    return res.status(statusCodes.serverError).send({
+      result: false,
+      message: "Error in Fetching Products. Please Try Again Later",
+    });
+  }
+};
 
 const fetchFilters = async (req,res) => {
   try {
     const colors = await productModel.distinct("colors"); // ✅ Fetch unique colors
     const sizes = await productModel.distinct("sizes"); // ✅ Fetch unique sizes
-    const types = await productModel.distinct("type"); // ✅ Fetch unique product types
+    const type = await productModel.distinct("type"); // ✅ Fetch unique product types
+    const articles = await productModel.distinct("articleName");
 
-
-    res.status(statusCodes.success).json({ result: true, message: "Filters Fetched", data:{colors, sizes, types}});
+    res.status(statusCodes.success).json({ result: true, message: "Filters Fetched", data:{colors, sizes, type, articles}});
 
   } catch (error) {
     res.status(500).json({ message: "Error fetching filters", error });
@@ -257,7 +354,7 @@ const fetchAllDealsImages = async (req,res) => {
     ])    
 
     if(!dealsImages){
-      return res.status(statusCodes.badRequest).send({result: false, message: "No Deals Images Found" })
+      return res.status(statusCodes.badRequest).send({result: false, message: "No Deals Images Found"})
     }
 
     return res.status(statusCodes.success).send({result: true, message: "Images Fetched", data: dealsImages[0].allImages})
@@ -268,4 +365,4 @@ const fetchAllDealsImages = async (req,res) => {
 
 
 
-export {login, purchaseProduct, getAllProdcuts,fetchFilters, fetchProductData, fetchAllDealsImages, generateOrderPerforma, getDistributor}
+export {login, purchaseProduct, getAllProducts,fetchFilters, fetchProductData, fetchAllDealsImages, generateOrderPerforma, getDistributor}

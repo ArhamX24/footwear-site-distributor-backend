@@ -10,7 +10,8 @@ let UserSchema = new Schema({
     transport:{type: String, required: true},
     phoneNo: {type: String, required: true, unique: true},
     password: {type: String, required: true},
-    role: {type: String, required: true}
+    role: {type: String, default: 'distributor'},
+    refreshToken: {type: String}
 })
 
 UserSchema.pre("save", async function (next) {

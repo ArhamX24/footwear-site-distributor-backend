@@ -60,7 +60,10 @@ const addProduct = async (req, res) => {
   try {
     // Extract fields from the request body
     let { name, price, category, type, colors, sizes, variant } = req.body;
+
     let numPrice = Number(price);
+    name = name ? name.trim() : '';
+    variant = variant ? variant.trim() : ''
 
     // Convert type and colors to lowercase for consistency
     let formattedType = type?.toLowerCase();
@@ -107,7 +110,7 @@ const addProduct = async (req, res) => {
     // Create a new product document in the products collection.
     // Even if variant information is provided, we allow many products with the same articleName.
     let newProduct = await productModel.create({
-      articleName: name,
+      articleName: name.toLowerCase(),
       price: numPrice,
       category,
       type: formattedType,
@@ -122,7 +125,7 @@ const addProduct = async (req, res) => {
       // Check if any product with the same articleName already has the variant in its variants array.
       let productWithVariant = await productModel.findOne({
         articleName: name,
-        variants: { $in: [variant] }
+        variants: { $in: [variant.toLowerCase()] }
       });
 
       // If no product (with that articleName) already includes this variant,
@@ -200,6 +203,8 @@ const addBestDeals = async (req,res) => {
 
       let startDate = new Date(start)
       let endDate = new Date(end)
+      articleName = articleName ? articleName.trim() : ""
+      reward = reward ? reward.trim() : ""
 
       let validateData = dealsValidationSchema.safeParse({
         articleName,
@@ -250,7 +255,7 @@ const addBestDeals = async (req,res) => {
 
     await productModel.findByIdAndUpdate(
           articleId, // Correctly passing the ID
-          { $set: { "deal.minQuantity": noOfPurchase , "deal.reward": reward , indeal: true} }, // ✅ Using $set to update
+          { $set: { "deal.minQuantity": noOfPurchase , "deal.reward": reward , "indeal": true} }, // ✅ Using $set to update
           { new: true, upsert: true } // ✅ Ensures it updates or creates if missing
   );
       
@@ -265,7 +270,7 @@ const getDeals = async (req,res) => {
         let allDeals = await dealsModel.find({})
 
         if(!allDeals){
-            return res.status(statusCodes.badRequest).send({result: false, message: "Deals Not Found or Not Added Yet"})
+            return res.status(statusCodes.success).send({result: false, message: "Deals Not Found or Not Added Yet"})
         }
 
         return res.status(statusCodes.success).send({result: true, message: "Found All Deals", data: allDeals})
@@ -295,6 +300,12 @@ const deleteDeals = async (req,res) => {
         }
 
         await dealsModel.findByIdAndDelete(productid)
+        await productModel.findByIdAndUpdate(
+          dealInTable.articleId, // Correctly passing the ID
+          { $set: { "deal": null , "indeal": false} }, // ✅ Using $set to update
+          { new: true, upsert: true } // ✅ Ensures it updates or creates if missing
+        
+  );
 
         return res.status(statusCodes.success).send({result: true, message: "Deleted Deal"})
     } catch (error) {

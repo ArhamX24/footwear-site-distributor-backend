@@ -21,6 +21,8 @@ let PurchaseproductSchema = new Schema({
         colors: [{type: String, required: true}],
         sizes: {type: String, required: true},
         price: {type: Number, required: true},
+        singlePrice: {type: Number, required: true},
+        variant: {type: String},
         totalAmount: {type: Number},
     }],
     isFulfiled: {type: Boolean}
