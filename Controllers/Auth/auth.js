@@ -84,7 +84,7 @@ const login = async (req,res) => {
         );
 
         // Store refresh token securely
-        user.refreshToken = bcrypt.hashSync(refreshToken, 10);
+        user.refreshToken = refreshToken
         await user.save();
 
         // Send tokens via HttpOnly cookies
