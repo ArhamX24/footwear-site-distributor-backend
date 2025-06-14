@@ -8,6 +8,7 @@ import purchaseProductModel from "../../Models/Purchasedproduct.model.js";
 import finalOrderPerforma from "../../Utils/finalOrderPerforma.js";
 import Festive from "../../Models/Festivle.model.js";
 import { uploadOnCloudinary } from "../../Utils/cloudinary.js";
+import dealsModel from "../../Models/Deals.model.js";
 
 const validationSchema = zod.object({
     phoneNo: zod
@@ -205,7 +206,7 @@ const addFestivleImage = async (req, res) => {
             });
         }
 
-        await Festive.create({
+        await dealsModel.create({
             startDate,
             endDate,
             image: uploadResult.secure_url // ✅ Save Cloudinary URL in the database

@@ -176,10 +176,10 @@ const getAllProducts = async (req, res) => {
   try {
     // Destructure pagination and search params.
     let { page = 1, limit = 10, search = "" } = req.query;
-    // Get the filters as received (they could be JSON strings).
+    // Get the filters as received; they may be JSON strings.
     let { filterName = "[]", filterOption = "[]" } = req.query;
 
-    // Parse JSON filter values; if parsing fails, use empty arrays.
+    // Parse JSON filter values. If parsing fails, revert to empty arrays.
     try {
       filterName = JSON.parse(filterName);
       filterOption = JSON.parse(filterOption);
@@ -215,54 +215,60 @@ const getAllProducts = async (req, res) => {
       filterName.forEach((name, index) => {
         if (!query.$and) query.$and = [];
 
-        // If the user has applied the price filter, handle it separately.
-       if (name === "price") {
-  // Extract the price value (if it's stored as an array, get its first element)
-  let priceRange = filterOption[index];
-  if (Array.isArray(priceRange)) {
-    priceRange = priceRange[0];
-  }
-  priceRange = priceRange.trim();
+        if (name === "price") {
+          // Handle price separately.
+          let priceRange = filterOption[index];
+          if (Array.isArray(priceRange)) priceRange = priceRange[0];
+          priceRange = priceRange.trim();
 
-  switch (priceRange) {
-    case "Under ₹100":
-      query.$and.push({ price: { $lt: 100 } });
-      break;
-    case "₹100 - ₹200":
-      query.$and.push({ price: { $gte: 100, $lte: 200 } });
-      break;
-    case "₹200 - ₹300":
-      query.$and.push({ price: { $gte: 200, $lte: 300 } });
-      break;
-    case "Above ₹300":
-      query.$and.push({ price: { $gt: 300 } });
-      break;
-    default:
-      break;
-  }
-}
-        // For fields such as 'colors' and 'variants' (stored as arrays in our schema), use the $in operator.
-        else if (["colors", "variants"].includes(name)) {
-          query.$and.push({
-            [name]: {
-              $in: Array.isArray(filterOption[index])
-                ? filterOption[index]
-                : [filterOption[index]],
-            },
-          });
+          switch (priceRange) {
+            case "Under ₹100":
+              query.$and.push({ price: { $lt: 100 } });
+              break;
+            case "₹100 - ₹200":
+              query.$and.push({ price: { $gte: 100, $lte: 200 } });
+              break;
+            case "₹200 - ₹300":
+              query.$and.push({ price: { $gte: 200, $lte: 300 } });
+              break;
+            case "Above ₹300":
+              query.$and.push({ price: { $gt: 300 } });
+              break;
+            default:
+              break;
+          }
         }
-        // For other fields do a direct match.
+        // Handle colors filter.
+        else if (name === "colors") {
+          const values = Array.isArray(filterOption[index])
+            ? filterOption[index]
+            : [filterOption[index]];
+          query.$and.push({ colors: { $in: values } });
+        }
+        // Explicit handling for variants. Accept both "variant" (singular)
+        // and "variants". Both are mapped to the "variants" field.
+        else if (["variant", "variants"].includes(name)) {
+          const variantValues = Array.isArray(filterOption[index])
+            ? filterOption[index]
+            : [filterOption[index]];
+          query.$and.push({ variants: { $in: variantValues } });
+        }
+        // Special handling for articleName: take only the first element.
+        else if (name === "articleName") {
+          const articleValue = Array.isArray(filterOption[index])
+            ? filterOption[index][0]
+            : filterOption[index];
+          query.$and.push({ articleName: articleValue });
+        }
+        // For all other filters, perform a direct match.
         else {
-          query.$and.push({
-            [name]: filterOption[index],
-          });
+          query.$and.push({ [name]: filterOption[index] });
         }
       });
     }
 
-    // 🔹 Fetching Products
+    // 🔹 Fetch Products
     const totalProducts = await productModel.countDocuments(query);
-    // We add .sort({price: 1}) here to sort the products in ascending order by price.
     const products = await productModel
       .find(query)
       .sort({ price: 1 })
@@ -273,7 +279,7 @@ const getAllProducts = async (req, res) => {
       return res.status(statusCodes.success).send({
         result: false,
         message: "Products Not Added Or Empty",
-        data: null 
+        data: null,
       });
     }
 
@@ -318,7 +324,7 @@ const fetchProductData = async (req, res) => {
 
     // Get distinct article names using the filter (if empty, it returns all articles)
     const articles = await productModel.distinct("articleName", articleFilter);
-    const allArticles = await productModel.distinct("articleName");
+    const allArticles = await productModel.distinct("articleName");    
 
     // If articleName is provided (non-empty), fetch the corresponding variants;
     // otherwise, return an empty array for variants.

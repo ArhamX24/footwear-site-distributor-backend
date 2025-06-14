@@ -17,6 +17,7 @@ server.use(express.urlencoded({extended: true}))
 server.use(cookieParser())
 server.use(cors({
     origin: "http://www.pinkeyfootwear.in",
+    // origin: "http://localhost:5173",
     credentials: true
 }))
 

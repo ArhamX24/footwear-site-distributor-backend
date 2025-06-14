@@ -6,7 +6,7 @@ let VariantsSchema = new Schema({
     articleName: {type: String},
     variantName: {type: String},
     imagesUrls: [{type: String}],
-    category: {type: String},
+    gender: {type: String},
     type: {type: String},
     price: {type: Number},
     sizes: [{type: String}],

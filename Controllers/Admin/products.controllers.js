@@ -59,11 +59,11 @@ const prodcutIdValidationSchema = zod.object({
 const addProduct = async (req, res) => {
   try {
     // Extract fields from the request body
-    let { name, price, category, type, colors, sizes, variant } = req.body;
+    let { name, price, gender, type, colors, sizes, variant } = req.body;
 
     let numPrice = Number(price);
     name = name ? name.trim() : '';
-    variant = variant ? variant.trim() : ''
+    variant = variant ? variant.trim().toLowerCase() : ''
 
     // Convert type and colors to lowercase for consistency
     let formattedType = type?.toLowerCase();
@@ -75,7 +75,7 @@ const addProduct = async (req, res) => {
     let validationCheckData = productValidationSchema.safeParse({
       name,
       price: numPrice,
-      category,
+      category: gender,
       type: formattedType,
       colors: formattedColors,
       sizes,
@@ -112,7 +112,7 @@ const addProduct = async (req, res) => {
     let newProduct = await productModel.create({
       articleName: name.toLowerCase(),
       price: numPrice,
-      category,
+      gender,
       type: formattedType,
       colors: formattedColors,
       sizes,
@@ -137,9 +137,9 @@ const addProduct = async (req, res) => {
       // In any case, create a Variant document with the provided details.
       await Variants.create({
         articleName: name,
-        variantName: variant,
+        variantName: variant.toLowerCase(),
         imagesUrls: imageUrls,
-        category,
+        gender,
         type: formattedType,
         price: numPrice,
         sizes,
@@ -149,21 +149,14 @@ const addProduct = async (req, res) => {
 
     return res.status(statusCodes.success).send({ result: true, message: "Product Added" });
   } catch (error) {
+    console.error(error)
     return res
       .status(statusCodes.serverError)
       .send({ result: false, message: "Error in Adding Product. Please Try Again Later", error: error});
   }
 };
 
-const updateProduct = async (req,res) => {
-  try {
-    
-  } catch (error) {
-    return res
-        .status(statusCodes.serverError)
-        .send({ result: false, message: "Error in Updating Product. Please Try Again Later"});
-  }
-}
+
 
 const deleteProduct = async (req,res) => {
     try {
