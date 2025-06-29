@@ -149,7 +149,6 @@ const addProduct = async (req, res) => {
 
     return res.status(statusCodes.success).send({ result: true, message: "Product Added" });
   } catch (error) {
-    console.error(error)
     return res
       .status(statusCodes.serverError)
       .send({ result: false, message: "Error in Adding Product. Please Try Again Later", error: error});
@@ -254,7 +253,7 @@ const addBestDeals = async (req,res) => {
       
     return res.status(statusCodes.success).send({result: true, message: "Deals Added"})
     } catch (error) {
-        return res.status(statusCodes.serverError).send({result: false, message: "Error in Adding Deals. Please Try Again Later", error: error})
+        return res.status(statusCodes.serverError).send({result: false, message: "Error in Adding Deals. Please Try Again Later"})
     }
 }
 

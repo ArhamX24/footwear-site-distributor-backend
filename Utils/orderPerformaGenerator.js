@@ -8,7 +8,7 @@ import PDFDocument from "pdfkit"
  * @param {import("express").Response} res - The Express response object.
  */
 const generateOrderPerformaPDF = (order, res) => {
-      
+
   // Create a new PDF document with some margins.
   const doc = new PDFDocument({ margin: 50 });
 
@@ -72,10 +72,22 @@ order.items.forEach((item, index) => {
      .text(colorsText, colourX, position, { width: colourWidth, ellipsis: true })
      .text(item.sizes, sizeX, position, { width: sizeWidth, ellipsis: true })
      .text(item.totalCartons, totalCartonsX, position, { width: totalCartonsWidth, align: "right" })
-     .text(`₹${item.singlePrice}`, rateX, position, { width: rateWidth, align: "right" })
-     .text(`₹${total.toFixed(2)}`, totalX, position, { width: totalWidth, align: "right" });
+     .text(`Rs. ${item.singlePrice}`, rateX, position, { width: rateWidth, align: "right" })
+     .text(`Rs. ${total.toFixed(2)}`, totalX, position, { width: totalWidth, align: "right" });
 
   position += 25;
+
+  if (item.claimedDeal) {
+    doc
+      .fontSize(9)
+      .fillColor("green")
+      .text(`Reward Claimed: ${item.dealReward}`, itemX, position, {
+        width: 400
+      })
+      .fillColor("black");
+
+    position += 15;
+  }
 });
 
 // Ensure document is properly finalized
@@ -86,7 +98,7 @@ order.items.forEach((item, index) => {
   const orderTotal = order.items.reduce((sum, item) => sum + (item.totalCartons * item.singlePrice), 0);
   doc.font("Helvetica-Bold")
     .text("Total:", 300, position + 20, { width: 90, align: "right" })
-    .text(`₹${orderTotal.toFixed(2)}`, 400, position + 20, { width: 90, align: "right" });
+    .text(`Rs. ${orderTotal.toFixed(2)}`, 400, position + 20, { width: 90, align: "right" });
 
   // --- Footer ---
   doc

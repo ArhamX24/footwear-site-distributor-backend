@@ -16,7 +16,7 @@ const adminAuth = async (req,res,next) => {
             return res.status(statusCodes.unauthorized).send({result: false, message: "Invalid Token"});
         }
 
-        let admin = await AdminModel.findOne({_id: verifyToken._id}).select("-refreshToken");
+        let admin = await AdminModel.findOne({_id: verifyToken._id})
 
         if(admin.role !== "admin"){
             return res.status(statusCodes.unauthorized).send({result: false, message: "Unauthorized"});

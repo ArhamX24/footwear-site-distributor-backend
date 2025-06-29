@@ -24,6 +24,8 @@ let PurchaseproductSchema = new Schema({
         singlePrice: {type: Number, required: true},
         variant: {type: String},
         totalAmount: {type: Number},
+        claimedDeal: {type: Boolean, default: false},
+        dealReward: {type: String, default: ''},
     }],
     isFulfiled: {type: Boolean}
 }, {timestamps: true})

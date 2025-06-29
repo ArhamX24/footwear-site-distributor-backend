@@ -17,7 +17,7 @@ const userAuth = async (req,res,next) => {
             return res.status(statusCodes.unauthorized).send({result: false, message: "Invalid Token"})
         }
 
-        let distributor = await userModel.findOne({_id: verifyToken._id}).select("-refreshToken")
+        let distributor = await userModel.findOne({_id: verifyToken._id})
 
         if(distributor.role !== 'distributor'){
             return res.status(statusCodes.unauthorized).send({result: false, message: "Unauthorized"})

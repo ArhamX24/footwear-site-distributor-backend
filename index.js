@@ -6,7 +6,9 @@ import dbConnect from "./DB/DbConnect.js";
 import adminRouter from "./Routes/admin.router.js";
 import userRouter from "./Routes/user.router.js";
 import AuthRouter from "./Routes/auth.router.js";
-import watchDeals from "./Utils/dealWatcher.js";
+import cron from "node-cron";
+import dealsModel from "./Models/Deals.model.js";
+import productModel from "./Models/Product.model.js";
 
 const server = express()
 
@@ -19,21 +21,44 @@ server.use(cors({
     credentials: true
 }))
 
-watchDeals()
-
 server.use("/api/v1/auth", AuthRouter)
 server.use("/api/v1/admin", adminRouter)
 server.use("/api/v1/distributor", userRouter)
 
 
-dbConnect().then(()=>{
+// Function to process expired deals
+const processExpiredDeals = async () => {
+  try {
+    // Find all deals where expireAt has passed
+    const expiredDeals = await dealsModel.find({ expireAt: { $lt: new Date() } });
+    
+    for (const deal of expiredDeals) {
+      const articleId = deal.articleId;
+      if (articleId) {
+        await productModel.findByIdAndUpdate(articleId, {
+          $unset: { deal: '', indeal: false}
+        });
+      }
+      // Manually remove the deal document
+      await dealsModel.deleteOne({ _id: deal._id });
+    }
+  } catch (error) {
+    console.error("Error processing expired deals:");
+  }
+};
+
+// Schedule the job to run every minute
+cron.schedule("* * * * *", async () => {
+  await processExpiredDeals();
+});
+
+dbConnect()
+  .then(() => {
     server.listen(process.env.PORT)
-    console.log("Connected")
-}).catch((err)=>{
-    console.log(err)
-})
-
-
+  })
+  .catch((err) => {
+    console.error("Database connection failed:", err);
+  });
 
 
 

@@ -53,7 +53,7 @@ let cookieOption = {
     path: "/",
     httpOnly: true,
     secure: true,
-    sameSite: 'none'
+    sameSite: 'Lax'
 }
 
 const register = async (req,res) => {
@@ -80,7 +80,6 @@ const register = async (req,res) => {
 
         return res.status(statuscodes.success).send({result: true, message: "Admin Created"})
     } catch (error) {
-        console.error(error)
         return res.status(statuscodes.serverError).send({result: false, message: "Error Creating Admin. Please Try Again Later"})
     }
 }
@@ -129,7 +128,6 @@ const login = async (req,res) => {
         return res.status(statuscodes.success).cookie("accessToken", accessToken, cookieOption).cookie("refreshToken", refreshToken, cookieOption).send({result: true, message: "Login Success", role: "admin"})
 
     } catch (error) {
-        console.error(error)
         return res.status(statuscodes.serverError).send({result: false, message: "Error Logging In. Please Try Again Later"})
     }
 }
@@ -218,7 +216,6 @@ const addFestivleImage = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("Error Adding Festive Image:", error);
         return res.status(statuscodes.serverError).send({ 
             result: false, message: "Error in Adding Festival Image. Please Try Again Later" 
         });

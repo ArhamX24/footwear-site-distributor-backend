@@ -23,16 +23,6 @@ const DealsSchema = new Schema({
 },{ timestamps: true });
 
 
-DealsSchema.index({ expireAt: 1 }, { expireAfterSeconds: 0 });
-
-DealsSchema.post("findOneAndDelete", async function (deal) {
-  if (deal) {
-    await productModel.findByIdAndUpdate(deal.articleId, {
-      $unset: { deal: {}, indeal: false }, 
-    });
-  }
-});
-
 
 const dealsModel = model('Deal', DealsSchema)
 

@@ -9,12 +9,13 @@ import Variants from "../../Models/Variants.Model.js"
 import generateOrderPerformaPDF from "../../Utils/orderPerformaGenerator.js"
 import purchaseProductModel from "../../Models/Purchasedproduct.model.js"
 import mongoose from "mongoose"
+import { baseURL } from "../../../Frontend/src/Utils/URLS.js"
 
 let cookieOption = {
     path: "/",
     httpOnly: true,
     secure: true,
-    sameSite: 'none'
+    sameSite: 'Lax'
 }
 
 const loginValidationSchema = zod.object({
@@ -105,9 +106,12 @@ const purchaseProduct = async (req,res) => {
       return res.status(400).json({ message: "Distributor details missing" });
     }
 
+    
+    
     // Expect an array of orders in the request body
     const orders = req?.body.items;
     const orderDate = req?.body.orderDate
+    
   
     if (!orders || !Array.isArray(orders) || orders.length === 0) {
       return res.status(400).json({ message: "No orders provided" });
@@ -123,7 +127,9 @@ const purchaseProduct = async (req,res) => {
       sizes: order.sizes,
       price: order.price,
       variant: order.variants[0],
-      singlePrice: order.singlePrice
+      singlePrice: order.singlePrice,
+      claimedDeal: order.dealClaimed,
+      dealReward: order.dealReward
     }));
 
     // Create and save the purchase order to the database
@@ -144,7 +150,7 @@ const purchaseProduct = async (req,res) => {
       result: true,
       message: "Order placed successfully",
       order: newPurchaseOrder,
-      downloadUrl: `http://localhost:8080/api/v1/distributor/orders/download-performa/${newPurchaseOrder._id}`,
+      downloadUrl: `${baseURL}/api/v1/distributor/orders/download-performa/${newPurchaseOrder._id}`,
     });
   } catch (error) {
     return res.status(500).json({
