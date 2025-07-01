@@ -32,10 +32,7 @@ const loginValidationSchema = zod.object({
 
 const distributorValidationSchema = zod.object({
 
-  billNo: zod.number({
-    required_error: "Bill number is required",
-    invalid_type_error: "Bill number must be a number"
-  }),
+  billNo: zod.string(),
   
   partyName: zod.string({
     required_error: "Party name is required",
