@@ -9,7 +9,6 @@ import Variants from "../../Models/Variants.Model.js"
 import generateOrderPerformaPDF from "../../Utils/orderPerformaGenerator.js"
 import purchaseProductModel from "../../Models/Purchasedproduct.model.js"
 import mongoose from "mongoose"
-import { baseURL } from "../../../Frontend/src/Utils/URLS.js"
 
 let cookieOption = {
     path: "/",
@@ -150,7 +149,7 @@ const purchaseProduct = async (req,res) => {
       result: true,
       message: "Order placed successfully",
       order: newPurchaseOrder,
-      downloadUrl: `${baseURL}/api/v1/distributor/orders/download-performa/${newPurchaseOrder._id}`,
+      downloadUrl: `https://pinkeyfootwear.in/api/v1/distributor/orders/download-performa/${newPurchaseOrder._id}`,
     });
   } catch (error) {
     return res.status(500).json({
