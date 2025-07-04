@@ -10,7 +10,7 @@ import cron from "node-cron";
 import dealsModel from "./Models/Deals.model.js";
 import productModel from "./Models/Product.model.js";
 
-const server = express();
+const server = express()
 
 server.use(express.json())
 server.use(express.urlencoded({extended: true}))
