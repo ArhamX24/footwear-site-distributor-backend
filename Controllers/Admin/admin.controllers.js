@@ -31,17 +31,15 @@ const loginValidationSchema = zod.object({
 })
 
 const distributorValidationSchema = zod.object({
-
-  billNo: zod.string(),
   
   partyName: zod.string({
     required_error: "Party name is required",
-    invalid_type_error: "Party name must be a string"
+    invalid_type_error: "Party name must be a Alphabet"
   }).min(1, "Party name cannot be empty"),
   
   transport: zod.string({
     required_error: "Transport is required",
-    invalid_type_error: "Transport must be a string"
+    invalid_type_error: "Transport must be a Alphabet"
   }).min(1, "Transport information cannot be empty"),
   
 })
