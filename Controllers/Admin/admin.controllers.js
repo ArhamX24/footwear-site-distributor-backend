@@ -77,7 +77,7 @@ const register = async (req,res) => {
 
         return res.status(statuscodes.success).send({result: true, message: "Admin Created"})
     } catch (error) {
-        return res.status(statuscodes.serverError).send({result: false, message: "Error Creating Admin. Please Try Again Later"})
+        return res.status(statuscodes.serverError).send({result: false, message: "Error Creating Admin. Please Try Again Later", error: error})
     }
 }
 
