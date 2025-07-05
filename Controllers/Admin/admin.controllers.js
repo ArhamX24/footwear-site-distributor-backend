@@ -59,9 +59,9 @@ const register = async (req,res) => {
 
         let checkData = validationSchema.safeParse({phoneNo: userdata.phoneNo, password: userdata.password});
 
-        if(!checkData.success){
-            return res.status(statuscodes.badRequest).send({result: false, message: checkData.error.errors[0].message, error: checkData.error})
-        }
+        // if(!checkData.success){
+        //     return res.status(statuscodes.badRequest).send({result: false, message: checkData.error.errors[0].message, error: checkData.error})
+        // }
 
         let alreadyInDb = await AdminModel.findOne({phoneNo: userdata.phoneNo})
 
