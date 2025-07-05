@@ -1,5 +1,6 @@
 import categoryModel from "../../Models/Categories.model.js";
 import dealsModel from "../../Models/Deals.model.js";
+import Festive from "../../Models/Festivle.model.js";
 import productModel from "../../Models/Product.model.js";
 import purchaseProductModel from "../../Models/Purchasedproduct.model.js";
 import Variants from "../../Models/Variants.Model.js";
@@ -262,10 +263,25 @@ const getDeals = async (req,res) => {
         let allDeals = await dealsModel.find({})
 
         if(!allDeals){
-            return res.status(statusCodes.success).send({result: false, message: "Deals Not Found or Not Added Yet"})
+          return res.status(statusCodes.success).send({result: false, message: "Deals Not Found or Not Added Yet"})
         }
 
-        return res.status(statusCodes.success).send({result: true, message: "Found All Deals", data: allDeals})
+        let festiveImages = await Festive.find({}, "image"); // ✅ Select only image field
+
+        if (!festiveImages || festiveImages.length === 0) {
+            return res.status(statuscodes.success).send({
+                result: false, message: "No Festival Images Added"
+            });
+        }
+        let imageUrls = festiveImages.map((festival) => festival.image);
+
+        let allImages = [...imageUrls,]
+
+        allDeals.forEach((item)=>{
+          allImages.push(item.image)
+        })        
+          
+        return res.status(statusCodes.success).send({result: true, message: "Found All Deals", data: allDeals, images: allImages})
     } catch (error) {
         return res.status(statusCodes.serverError).send({result: false, message: "Error in Getting Deals. Please Try Again Later"})
     }

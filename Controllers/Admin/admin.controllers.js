@@ -199,7 +199,7 @@ const addFestivleImage = async (req, res) => {
             });
         }
 
-        await dealsModel.create({
+        await Festive.create({
             startDate,
             endDate,
             image: uploadResult.secure_url // ✅ Save Cloudinary URL in the database
