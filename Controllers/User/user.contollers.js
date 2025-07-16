@@ -104,13 +104,10 @@ const purchaseProduct = async (req,res) => {
     if (!distributor) {
       return res.status(400).json({ message: "Distributor details missing" });
     }
-
-    
     
     // Expect an array of orders in the request body
     const orders = req?.body.items;
     const orderDate = req?.body.orderDate
-    
   
     if (!orders || !Array.isArray(orders) || orders.length === 0) {
       return res.status(400).json({ message: "No orders provided" });
@@ -124,11 +121,10 @@ const purchaseProduct = async (req,res) => {
       totalCartons: order.quantity,
       colors: order.colors,
       sizes: order.sizes,
-      price: order.price,
-      variant: order.variants[0],
-      singlePrice: order.singlePrice,
       claimedDeal: order.dealClaimed,
-      dealReward: order.dealReward
+      dealReward: order.dealReward,
+      variant: order.variant,
+      segment: order.segment
     }));
 
     // Create and save the purchase order to the database
@@ -179,174 +175,215 @@ try {
 
 const getAllProducts = async (req, res) => {
   try {
-    // Destructure pagination and search params.
     let { page = 1, limit = 10, search = "" } = req.query;
-    // Get the filters as received; they may be JSON strings.
     let { filterName = "[]", filterOption = "[]" } = req.query;
 
-    // Parse JSON filter values. If parsing fails, revert to empty arrays.
     try {
-      filterName = JSON.parse(filterName);
+      filterName   = JSON.parse(filterName);
       filterOption = JSON.parse(filterOption);
-    } catch (error) {
+    } catch {
       filterName = [];
       filterOption = [];
     }
 
     const skip = (page - 1) * limit;
-    let query = {};
+    const match = {}; 
 
-    // 🔹 Searching Logic (handles multi-word search properly)
-    if (search) {
-      const searchTerms = search.split(" ");
-      query.$and = searchTerms.map((term) => ({
-        $or: [
-          { articleName: { $regex: term, $options: "i" } },
-          { category: { $regex: term, $options: "i" } },
-          { colors: { $regex: term, $options: "i" } },
-          { sizes: { $regex: term, $options: "i" } },
-          { type: { $regex: term, $options: "i" } },
-          { variants: { $regex: term, $options: "i" } },
-        ],
-      }));
+    // 1) Build your top-level match for segment, variant & gender:
+    filterName.forEach((key, i) => {
+      const vals = (Array.isArray(filterOption[i]) ? filterOption[i] : [filterOption[i]])
+        .filter(v => v);
+      if (!vals.length) return;
+
+      if (key === "segment") {
+        match.segment = { $in: vals };
+      }
+      else if (key === "variant" || key === "variants") {
+        // ensure the document has at least one matching variant
+        match["variants.name"] = match["variants.name"] || { $in: [] };
+        match["variants.name"].$in.push(...vals);
+      }
+      else if (key === "gender") {
+        // ensure the document has at least one article with matching gender
+        match["variants.articles.gender"] = 
+          match["variants.articles.gender"] || { $in: [] };
+        match["variants.articles.gender"].$in.push(...vals);
+      }
+    });
+
+    // 2) Aggregation pipeline
+    const pipeline = [];
+
+    // apply search if needed (matches article‐fields but still returns full docs)
+    if (search.trim()) {
+      const terms = search.trim().split(/\s+/);
+      pipeline.push({
+        $match: {
+          $or: terms.flatMap(t => [
+            { "variants.articles.name":   { $regex: t, $options: "i" } },
+            { "variants.articles.gender": { $regex: t, $options: "i" } }
+          ])
+        }
+      });
     }
 
-    // 🔹 Handling Multiple Filters Correctly
-    if (
-      Array.isArray(filterName) &&
-      Array.isArray(filterOption) &&
-      filterName.length === filterOption.length
-    ) {
-      filterName.forEach((name, index) => {
-        if (!query.$and) query.$and = [];
+    // apply our top‐level matches
+    if (Object.keys(match).length) {
+      pipeline.push({ $match: match });
+    }
 
-        if (name === "price") {
-          // Handle price separately.
-          let priceRange = filterOption[index];
-          if (Array.isArray(priceRange)) priceRange = priceRange[0];
-          priceRange = priceRange.trim();
-
-          switch (priceRange) {
-            case "Under ₹100":
-              query.$and.push({ price: { $lt: 100 } });
-              break;
-            case "₹100 - ₹200":
-              query.$and.push({ price: { $gte: 100, $lte: 200 } });
-              break;
-            case "₹200 - ₹300":
-              query.$and.push({ price: { $gte: 200, $lte: 300 } });
-              break;
-            case "Above ₹300":
-              query.$and.push({ price: { $gt: 300 } });
-              break;
-            default:
-              break;
+    // 3) Filter variants array to only those whose name matched
+    if (match["variants.name"]) {
+      pipeline.push({
+        $addFields: {
+          variants: {
+            $filter: {
+              input: "$variants",
+              as:   "v",
+              cond: { $in: ["$$v.name", match["variants.name"].$in] }
+            }
           }
         }
-        // Handle colors filter.
-        else if (name === "colors") {
-          const values = Array.isArray(filterOption[index])
-            ? filterOption[index]
-            : [filterOption[index]];
-          query.$and.push({ colors: { $in: values } });
-        }
-        // Explicit handling for variants. Accept both "variant" (singular)
-        // and "variants". Both are mapped to the "variants" field.
-        else if (["variant", "variants"].includes(name)) {
-          const variantValues = Array.isArray(filterOption[index])
-            ? filterOption[index]
-            : [filterOption[index]];
-          query.$and.push({ variants: { $in: variantValues } });
-        }
-        // Special handling for articleName: take only the first element.
-        else if (name === "articleName") {
-          const articleValue = Array.isArray(filterOption[index])
-            ? filterOption[index][0]
-            : filterOption[index];
-          query.$and.push({ articleName: articleValue });
-        }
-        // For all other filters, perform a direct match.
-        else {
-          query.$and.push({ [name]: filterOption[index] });
-        }
       });
     }
 
-    // 🔹 Fetch Products
-    const totalProducts = await productModel.countDocuments(query);
-    const products = await productModel
-      .find(query)
-      .sort({ price: 1 })
-      .skip(skip)
-      .limit(Number(limit));
-
-    if (!products || products.length === 0) {
-      return res.status(statusCodes.success).send({
-        result: false,
-        message: "Products Not Added Or Empty",
-        data: null,
-      });
-    }
-
-    return res.status(statusCodes.success).send({
-      result: true,
-      message: "Found All Products",
-      data: products,
-      totalPages: Math.ceil(totalProducts / limit),
-      currentPage: Number(page),
+    // 4) For each remaining variant, filter its articles by gender (and/or search)
+    pipeline.push({
+      $addFields: {
+        variants: {
+          $map: {
+            input: "$variants",
+            as:    "v",
+            in: {
+              name: "$$v.name",
+              // keep only articles whose gender or name search matched
+              articles: {
+                $filter: {
+                  input: "$$v.articles",
+                  as:   "a",
+                  cond: {
+                    $and: [
+                      // gender filter
+                      ...(match["variants.articles.gender"]
+                        ? [{ $in: ["$$a.gender", match["variants.articles.gender"].$in] }]
+                        : []),
+                      // search filter (optional)
+                      ...(search.trim()
+                        ? [{ 
+                            $or: [
+                              { $regexMatch: { input: "$$a.name",   regex: search, options: "i" } },
+                              { $regexMatch: { input: "$$a.gender", regex: search, options: "i" } }
+                            ]
+                          }]
+                        : [])
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     });
-  } catch (error) {
-    return res.status(statusCodes.serverError).send({
-      result: false,
-      message: "Error in Fetching Products. Please Try Again Later",
+
+    // 5) Pagination
+    pipeline.push({ $skip: skip }, { $limit: Number(limit) });
+
+    // 6) (Optional) Count total matched docs via $facet
+    // pipeline.push({
+    //   $facet: {
+    //     metadata: [ { $count: "total" } ],
+    //     data:     [ { $skip: skip }, { $limit: Number(limit) } ]
+    //   }
+    // });
+
+    const results = await productModel.aggregate(pipeline);
+    // If you used $facet, extract results.data & results.metadata[0].total
+
+    return res.status(200).json({
+      result: !!results.length,
+      message: results.length
+        ? "Products fetched successfully"
+        : "No products matched",
+      data: results
     });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ result: false, message: "Error fetching products" });
   }
 };
 
-const fetchFilters = async (req,res) => {
+const fetchFilters = async (req, res) => {
   try {
-    const colors = await productModel.distinct("colors"); // ✅ Fetch unique colors
-    const sizes = await productModel.distinct("sizes"); // ✅ Fetch unique sizes
-    const type = await productModel.distinct("type"); // ✅ Fetch unique product types
-    const articles = await productModel.distinct("articleName");
+    // ✅ Top-level distinct segments
+    const segments = await productModel.distinct("segment");
 
-    res.status(statusCodes.success).json({ result: true, message: "Filters Fetched", data:{colors, sizes, type, articles}});
+    // ✅ Extracting unique variant names from nested array
+    const products = await productModel.find({}, { variants: 1 });
 
+    const variantSet = new Set();
+    products.forEach(product => {
+      product.variants?.forEach(variant => {
+        if (variant.name) {
+          variantSet.add(variant.name);
+        }
+      });
+    });
+
+    const variantNames = Array.from(variantSet);
+
+    res.status(statusCodes.success).json({
+      result: true,
+      message: "Filters Fetched",
+      data: { segments, variants: variantNames },
+    });
   } catch (error) {
-    res.status(500).json({ message: "Error fetching filters", error });
+    console.error("Error fetching filters:", error);
+    res.status(500).json({
+      result: false,
+      message: "Error fetching filters",
+      error,
+    });
   }
-}
+};
  
 const fetchProductData = async (req, res) => {
   try {
-    // Extract articleName from the query; default is an empty string
-    const { articleName = '' } = req.query;
+    const { segment = '' } = req.query;
 
-    // Build the filter for products; if articleName is provided, use a regex filter
-    const articleFilter = articleName
-      ? { articleName: { $regex: articleName, $options: 'i' } }
-      : {};
+    // 🔍 Filter products by segment
+    const products = await productModel.find(segment ? { segment } : {});
 
-    // Get distinct article names using the filter (if empty, it returns all articles)
-    const articles = await productModel.distinct("articleName", articleFilter);
-    const allArticles = await productModel.distinct("articleName");    
+    // 🧪 Gather all articles from matching products
+    const articleSet = new Set();
+    const variantSet = new Set();
 
-    // If articleName is provided (non-empty), fetch the corresponding variants;
-    // otherwise, return an empty array for variants.
-    let variants = [];
-    if (articleName.trim() !== '') {
-      variants = await Variants.distinct("variantName", { 
-        articleName: { $regex: articleName, $options: 'i' } 
+    products.forEach(product => {
+      // Extract variant names
+      product.variants?.forEach(variant => {
+        if (variant.name) variantSet.add(variant.name);
+
+        // Extract article names
+        variant.articles?.forEach(article => {
+          if (article.name) articleSet.add(article.name);
+        });
       });
-    }
+    });
+
+    // Final distinct arrays
+    const articles = Array.from(articleSet);
+    const variants = Array.from(variantSet);
 
     return res.status(statusCodes.success).json({
       result: true,
-      message: "Names Fetched",
-      data: { articles, variants, allArticles }
+      message: "Product Data Fetched",
+      data: { segment, articles, variants },
     });
   } catch (error) {
+    console.error("Error in fetchProductData:", error);
     return res.status(statusCodes.serverError).json({
+      result: false,
       message: "Error fetching Products Data",
       error
     });

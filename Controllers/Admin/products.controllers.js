@@ -59,136 +59,183 @@ const prodcutIdValidationSchema = zod.object({
 
 const addProduct = async (req, res) => {
   try {
-    // Extract fields from the request body
-    let { name, price, gender, type, colors, sizes, variant } = req.body;
+    let { segment, gender, articleName, colors, sizes, variant } = req.body;
 
-    let numPrice = Number(price);
-    name = name ? name.trim() : '';
-    variant = variant ? variant.trim().toLowerCase() : ''
+    segment = segment?.trim().toLowerCase();
+    variant = variant?.trim().toLowerCase();
+    articleName = articleName?.trim().toLowerCase();
 
-    // Convert type and colors to lowercase for consistency
-    let formattedType = type?.toLowerCase();
-    let formattedColors = Array.isArray(colors)
+    const formattedColors = Array.isArray(colors)
       ? colors.map(color => color.toLowerCase())
-      : colors?.toLowerCase();
+      : [colors?.toLowerCase()];
 
-    // Validate using your validation schema (for example, using Zod or Yup)
-    let validationCheckData = productValidationSchema.safeParse({
-      name,
-      price: numPrice,
-      category: gender,
-      type: formattedType,
-      colors: formattedColors,
-      sizes,
-    });
-
-    if (!validationCheckData.success) {
-      return res
-        .status(statusCodes.badRequest)
-        .send({ result: false, message: validationCheckData.error.errors[0].message });
-    }
-
-    // Ensure at least one image has been uploaded
+    // --- image upload section (unchanged)
     if (!req.files || req.files.length === 0) {
-      return res
-        .status(statusCodes.badRequest)
+      return res.status(statusCodes.badRequest)
         .send({ result: false, message: "Please Upload At Least One Image" });
     }
 
-    // Upload all images
     const uploadPromises = req.files.map((file) => uploadOnCloudinary(file.path));
 
     let uploadResults;
     try {
       uploadResults = await Promise.all(uploadPromises);
     } catch (uploadError) {
-      return res
-        .status(statusCodes.badRequest)
+      return res.status(statusCodes.badRequest)
         .send({ result: false, message: "One or more images failed to upload. Please try again later" });
     }
-    let imageUrls = uploadResults.map((file) => file.secure_url);
 
-    // Create a new product document in the products collection.
-    // Even if variant information is provided, we allow many products with the same articleName.
-    let newProduct = await productModel.create({
-      articleName: name.toLowerCase(),
-      price: numPrice,
-      gender,
-      type: formattedType,
+    const imageUrls = uploadResults.map((file) => file.secure_url);
+
+    // --- fetch existing segment
+    let existingSegment = await productModel.findOne({ segment });
+
+    const newArticle = {
+      name: articleName,
       colors: formattedColors,
       sizes,
       images: imageUrls,
-      // variants field may be omitted or empty by default.
-    });
+      gender
+    };
 
-    // If a variant is provided, handle the variant details.
-    if (variant) {
-      // Check if any product with the same articleName already has the variant in its variants array.
-      let productWithVariant = await productModel.findOne({
-        articleName: name,
-        variants: { $in: [variant.toLowerCase()] }
+    if (!existingSegment) {
+      // Create entire structure
+      await productModel.create({
+        segment,
+        variants: [{
+          name: variant,
+          articles: [newArticle]
+        }]
       });
 
-      // If no product (with that articleName) already includes this variant,
-      // update the newly created product to add the variant name to its variants array.
-      if (!productWithVariant) {
-        await productModel.findByIdAndUpdate(newProduct._id, { $push: { variants: variant } });
-      }
-      
-      // In any case, create a Variant document with the provided details.
-      await Variants.create({
-        articleName: name,
-        variantName: variant.toLowerCase(),
-        imagesUrls: imageUrls,
-        gender,
-        type: formattedType,
-        price: numPrice,
-        sizes,
-        colors: formattedColors,
-      });
+      return res.status(statusCodes.success).send({ result: true, message: "Segment, variant, and article created" });
     }
 
-    return res.status(statusCodes.success).send({ result: true, message: "Product Added" });
+    // --- Segment exists. Find or create variant
+    let variantIndex = existingSegment.variants.findIndex(v => v.name === variant);
+
+    if (variantIndex === -1) {
+      // Add new variant with article
+      existingSegment.variants.push({
+        name: variant,
+        articles: [newArticle]
+      });
+    } else {
+      // Add article to existing variant
+      existingSegment.variants[variantIndex].articles.push(newArticle);
+    }
+
+    await existingSegment.save();
+
+    return res.status(statusCodes.success).send({ result: true, message: "Variant and/or article added to existing segment" });
+
   } catch (error) {
-    return res
-      .status(statusCodes.serverError)
-      .send({ result: false, message: "Error in Adding Product. Please Try Again Later", error: error});
+    return res.status(statusCodes.serverError)
+      .send({ result: false, message: "Error in Adding Product. Please Try Again Later", error });
   }
 };
 
 
 
-const deleteProduct = async (req,res) => {
-    try {
-        let {productid} = req?.params;        
+// DELETE /api/v1/admin/products/deleteproduct/:productid
+// Now handles both top‐level product deletes AND nested article deletes
+const deleteProduct = async (req, res) => {
+  try {
+    const { productid } = req.params;
 
-        let productInDb = await productModel.findById(productid)
-
-        if(!productInDb){
-            return res.status(statusCodes.notFound).send({result: false, message: "Can't Find Product You Are Looking For"})
-        }
-
-        await productModel.findByIdAndDelete(productid)
-
-        return res.status(statusCodes.success).send({result: true, message: "Product Deleted"})
-    } catch (error) {
-        return res.status(statusCodes.serverError).send({result: false, message: "Error in Deleting Product. Please Try Again Later"})
+    // 1) Is it a top‐level product?
+    const productDoc = await productModel.findById(productid);
+    if (productDoc) {
+      // remove the entire product document
+      await productModel.findByIdAndDelete(productid);
+      return res
+        .status(statusCodes.success)
+        .send({ result: true, message: "Product deleted" });
     }
-}
 
-const getAllProdcuts = async (req,res) => {
-    try {
-      let products = await productModel.find({})
+    // 2) Otherwise, try to delete a nested article by its _id
+    //    Find the product that contains this article
+    const parent = await productModel.findOne({
+      "variants.articles._id": productid,
+    });
+    if (!parent) {
+      return res
+        .status(statusCodes.notFound)
+        .send({ result: false, message: "No product or article found" });
+    }
 
-      if(!products){
-        return res.status(statusCodes.notFound).send({result: false, message: "No Products"})
+    // Pull out the matching article from its variant
+    await productModel.updateOne(
+      { _id: parent._id },
+      {
+        $pull: {
+          "variants.$[v].articles": { _id: productid },
+        },
+      },
+      {
+        arrayFilters: [{ "v.articles._id": productid }],
+        // safe by default, no upsert
       }
+    );
 
-      return res.status(statusCodes.success).send({result: true, message: "Products Retrieved", data: products})
-    } catch (error) {
-        return res.status(statusCodes.serverError).send({result: false, message: "Error in Deleting Product. Please Try Again Later"})
+    return res
+      .status(statusCodes.success)
+      .send({ result: true, message: "Article deleted" });
+  } catch (error) {
+    console.error("Delete Error:", error);
+    return res
+      .status(statusCodes.serverError)
+      .send({
+        result: false,
+        message: "Error deleting. Please try again later.",
+      });
+  }
+};
+
+const getAllProdcuts = async (req, res) => {
+  try {
+    // 1) fetch all products with their nested variants → articles
+    const products = await productModel.find({});
+    if (!products || products.length === 0) {
+      return res
+        .status(statusCodes.notFound)
+        .send({ result: false, message: "No products found" });
     }
-}
+
+    // 2) flatten every product.variants[].articles[] into one array,
+    //    carrying over each article's context + product.segment
+    const articles = products.flatMap((product) =>
+      (product.variants || []).flatMap((variant) =>
+        (variant.articles || []).map((article) => ({
+          // article's own fields
+          ...article.toObject(),
+          // context fields
+          variantId: variant._id,
+          variantName: variant.name,
+          productId: product._id,
+          productName: product.name || product.articleName,
+          segment: product.segment,          // ← include segment
+        }))
+      )
+    );
+
+    // 3) return that single, flattened article list
+    return res.status(statusCodes.success).send({
+      result: true,
+      message: "Articles retrieved successfully",
+      totalCount: articles.length,
+      data: articles,
+    });
+  } catch (error) {
+    console.error("Get Articles Error:", error);
+    return res
+      .status(statusCodes.serverError)
+      .send({
+        result: false,
+        message: "Error retrieving articles. Please try again later.",
+      });
+  }
+};
 
 const addBestDeals = async (req,res) => {
     try {
@@ -246,12 +293,26 @@ const addBestDeals = async (req,res) => {
       expireAt: endDate
     })
 
-    await productModel.findByIdAndUpdate(
-          articleId, // Correctly passing the ID
-          { $set: { "deal.minQuantity": noOfPurchase , "deal.reward": reward , "indeal": true} }, // ✅ Using $set to update
-          { new: true, upsert: true } // ✅ Ensures it updates or creates if missing
-  );
-      
+// 4) Mark that article as "in deal" and set its minQuantity & reward
+      await productModel.findOneAndUpdate(
+        { "variants.articles._id": articleId },        // find the product containing that article
+        {
+          $set: {
+            // for the matching variant (v) and article (a) set these fields
+            "variants.$[v].articles.$[a].deal.minQuantity": noOfPurchase,
+            "variants.$[v].articles.$[a].deal.reward": reward,
+            "variants.$[v].articles.$[a].indeal": true
+          }
+        },
+        {
+          arrayFilters: [
+            { "v.articles._id": articleId },  // pick the variant whose articles[] has our ID
+            { "a._id": articleId }            // pick the article subdoc by ID
+          ],
+          new: true
+        }
+      );
+            
     return res.status(statusCodes.success).send({result: true, message: "Deals Added"})
     } catch (error) {
         return res.status(statusCodes.serverError).send({result: false, message: "Error in Adding Deals. Please Try Again Later"})
@@ -268,11 +329,6 @@ const getDeals = async (req,res) => {
 
         let festiveImages = await Festive.find({}, "image"); // ✅ Select only image field
 
-        if (!festiveImages || festiveImages.length === 0) {
-            return res.status(statuscodes.success).send({
-                result: false, message: "No Festival Images Added"
-            });
-        }
         let imageUrls = festiveImages.map((festival) => festival.image);
 
         let allImages = [...imageUrls,]
@@ -283,6 +339,7 @@ const getDeals = async (req,res) => {
           
         return res.status(statusCodes.success).send({result: true, message: "Found All Deals", data: allDeals, images: allImages})
     } catch (error) {
+      console.error(error)
         return res.status(statusCodes.serverError).send({result: false, message: "Error in Getting Deals. Please Try Again Later"})
     }
 }

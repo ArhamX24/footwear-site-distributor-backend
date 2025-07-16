@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { string } from "zod";
 
 let {model, Schema} = mongoose;
 
@@ -20,10 +21,8 @@ let PurchaseproductSchema = new Schema({
         totalCartons: {type: Number, required: true},
         colors: [{type: String, required: true}],
         sizes: {type: String, required: true},
-        price: {type: Number, required: true},
-        singlePrice: {type: Number, required: true},
         variant: {type: String},
-        totalAmount: {type: Number},
+        segment: {type: String},
         claimedDeal: {type: Boolean, default: false},
         dealReward: {type: String, default: ''},
     }],

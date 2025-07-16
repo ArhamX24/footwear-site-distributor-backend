@@ -35,43 +35,43 @@ const finalOrderPerforma = (order, res) => {
   const tableTop = 180;
 
   // Adjusted column positions & widths for proper alignment
-const itemX = 50, itemWidth = 80;
+const segmentX = 50, segmentWidth = 80;
 const variantX = 140, variantWidth = 80;
-const colourX = 230, colourWidth = 80;
-const sizeX = 320, sizeWidth = 70;
-const totalCartonsX = 390, totalCartonsWidth = 60;
-const rateX = 460, rateWidth = 60; // Shrunk width
-const totalX = 520, totalWidth = 70; // Adjusted to prevent overflow
+const articleX = 230, articleWidth = 80;
+const colourX = 320, colourWidth = 70;
+const sizeX = 390, sizeWidth = 60;
+const rateX = 460, rateWidth = 60;
+const totalX = 520, totalWidth = 70;
 
   // Draw the header row using bold font
 doc.font("Helvetica-Bold")
-  .text("Article Name", itemX, tableTop, { width: itemWidth })
-  .text("Variant", variantX, tableTop, { width: variantWidth })
+  .text("Segment", segmentX, tableTop, { width: segmentWidth })
+  .text("Type", variantX, tableTop, { width: variantWidth })
+  .text("Article Name", articleX, tableTop, { width: articleWidth })
   .text("Colour", colourX, tableTop, { width: colourWidth })
   .text("Size", sizeX, tableTop, { width: sizeWidth })
-  .text("Total C/s", totalCartonsX, tableTop, { width: totalCartonsWidth, align: "right" })
   .text("Rate per C/s", rateX, tableTop, { width: rateWidth, align: "right" })
-  .text("Total", totalX, tableTop, { width: totalWidth, align: "right" });
+  .text("Total C/s", totalX, tableTop, { width: totalWidth, align: "right" });
 
-  // Draw a horizontal line under the header
-doc.moveTo(itemX, tableTop + 20).lineTo(totalX + totalWidth, tableTop + 20).stroke();
+// Draw a horizontal line under the header
+doc.moveTo(segmentX, tableTop + 20).lineTo(totalX + totalWidth, tableTop + 20).stroke();
 
   // --- Table Rows ---
   doc.font("Helvetica");
   let position = tableTop + 30;
 
 order.items.forEach((item, index) => {
-  const total = item.totalCartons * item.singlePrice;
+  // const total = item.totalCartons * item.singlePrice;
   const colorsText = Array.isArray(item.colors) ? item.colors.join(', ') : item.colors;
 
-  doc.text(`${index + 1}.`, itemX - 20, position, { width: 20 })
-     .text(item.articleName, itemX, position, { width: itemWidth, ellipsis: true })
-     .text(item.variant ? item.variant : "-", variantX, position, { width: variantWidth, ellipsis: true })
-     .text(colorsText, colourX, position, { width: colourWidth, ellipsis: true })
-     .text(item.sizes, sizeX, position, { width: sizeWidth, ellipsis: true })
-     .text(item.totalCartons, totalCartonsX, position, { width: totalCartonsWidth, align: "right" })
-     .text(`Rs. ${item.singlePrice}`, rateX, position, { width: rateWidth, align: "right" })
-     .text(`Rs. ${total.toFixed(2)}`, totalX, position, { width: totalWidth, align: "right" });
+  doc.text(`${index + 1}.`, segmentX - 20, position, { width: 20 })
+   .text(item.segment || "-", segmentX, position, { width: segmentWidth, ellipsis: true })
+   .text(item.variant || "-", variantX, position, { width: variantWidth, ellipsis: true })
+   .text(item.articleName || "-", articleX, position, { width: articleWidth, ellipsis: true })
+   .text(colorsText || "-", colourX, position, { width: colourWidth, ellipsis: true })
+   .text(item.sizes || "-", sizeX, position, { width: sizeWidth, ellipsis: true })
+   .text(item.price ? `Rs. ${item.singlePrice}` : "-", rateX, position, { width: rateWidth, align: "right" })
+   .text(item.totalCartons || "-", totalX, position, { width: totalWidth, align: "right" });
 
   position += 25;
 
@@ -87,11 +87,11 @@ order.items.forEach((item, index) => {
     position += 15;
   }
 });
-  // --- Order Total ---
-  const orderTotal = order.items.reduce((sum, item) => sum + (item.totalCartons * item.singlePrice), 0);
-  doc.font("Helvetica-Bold")
-      .text("Total:", 300, position + 20, { width: 90, align: "right" })
-      .text(`Rs. ${orderTotal.toFixed(2)}`, 400, position + 20, { width: 90, align: "right" });
+  // // --- Order Total ---
+  // const orderTotal = order.items.reduce((sum, item) => sum + (item.totalCartons * item.singlePrice), 0);
+  // doc.font("Helvetica-Bold")
+  //     .text("Total:", 300, position + 20, { width: 90, align: "right" })
+  //     .text(`Rs. ${orderTotal.toFixed(2)}`, 400, position + 20, { width: 90, align: "right" });
 
   // Finalize the PDF and end the stream.
   doc.end();

@@ -2,18 +2,29 @@ import mongoose from "mongoose";
 
 let {model, Schema} = mongoose
 
-const productSchema = new Schema({
-  articleName: { type: String},
-  price: { type: Number},
-  gender: {type: String},
-  type:{type: String},
-  variants:[{type: String, default: ""}],
-  colors: [{ type: String}],
-  sizes:[{type: String}],
+const articleSchema = new Schema({
+  name: { type: String, required: true },
+  colors: [{ type: String }],
+  sizes: [{ type: String }],
   images: [{ type: String, required: true }],
-  indeal:{type: Boolean, default: false},
-  deal: {minQuantity: String, reward: String}
+  gender: { type: String },
+  indeal: { type: Boolean, default: false },
+  deal: {
+    minQuantity: String,
+    reward: String
+  }
+});
+
+const variantSchema = new Schema({
+  name: { type: String, required: true },
+  articles: [articleSchema]
+});
+
+const productSchema = new Schema({
+  segment: { type: String, required: true },
+  variants: [variantSchema]
 }, { timestamps: true });
+
 
 let productModel = model("Product", productSchema)
 
