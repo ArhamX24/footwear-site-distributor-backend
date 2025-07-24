@@ -3,10 +3,12 @@ import dealsModel from "../../Models/Deals.model.js";
 import Festive from "../../Models/Festivle.model.js";
 import productModel from "../../Models/Product.model.js";
 import purchaseProductModel from "../../Models/Purchasedproduct.model.js";
-import Variants from "../../Models/Variants.Model.js";
 import { uploadOnCloudinary } from "../../Utils/cloudinary.js";
 import statusCodes from "../../Utils/statuscodes.js";
 import zod from 'zod';
+import xlsx from "xlsx";
+import path from 'path';
+import fs from 'fs'
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 
@@ -65,11 +67,19 @@ const addProduct = async (req, res) => {
     variant = variant?.trim().toLowerCase();
     articleName = articleName?.trim().toLowerCase();
 
-    const formattedColors = Array.isArray(colors)
-      ? colors.map(color => color.toLowerCase())
-      : [colors?.toLowerCase()];
+    // --- detect "all colors"
+    let rawColors = Array.isArray(colors) ? colors : [colors];
+    let isAllColorsAvailable = false;
+    let formattedColors;
 
-    // --- image upload section (unchanged)
+    if (rawColors.some(c => c?.trim().toLowerCase() === "all colors" || c?.trim().toLowerCase() === "all" || c?.trim().toLowerCase() === "allColors" || c?.trim().toLowerCase() === "allolors" )) {
+      isAllColorsAvailable = true;
+      formattedColors = [];
+    } else {
+      formattedColors = rawColors.map(color => color?.trim().toLowerCase()).filter(Boolean);
+    }
+
+    // --- image upload section
     if (!req.files || req.files.length === 0) {
       return res.status(statusCodes.badRequest)
         .send({ result: false, message: "Please Upload At Least One Image" });
@@ -95,11 +105,11 @@ const addProduct = async (req, res) => {
       colors: formattedColors,
       sizes,
       images: imageUrls,
-      gender
+      gender,
+      allColorsAvailable: isAllColorsAvailable
     };
 
     if (!existingSegment) {
-      // Create entire structure
       await productModel.create({
         segment,
         variants: [{
@@ -108,26 +118,26 @@ const addProduct = async (req, res) => {
         }]
       });
 
-      return res.status(statusCodes.success).send({ result: true, message: "Segment, variant, and article created" });
+      return res.status(statusCodes.success)
+        .send({ result: true, message: "Segment, variant, and article created" });
     }
 
     // --- Segment exists. Find or create variant
     let variantIndex = existingSegment.variants.findIndex(v => v.name === variant);
 
     if (variantIndex === -1) {
-      // Add new variant with article
       existingSegment.variants.push({
         name: variant,
         articles: [newArticle]
       });
     } else {
-      // Add article to existing variant
       existingSegment.variants[variantIndex].articles.push(newArticle);
     }
 
     await existingSegment.save();
 
-    return res.status(statusCodes.success).send({ result: true, message: "Variant and/or article added to existing segment" });
+    return res.status(statusCodes.success)
+      .send({ result: true, message: "Variant and/or article added to existing segment" });
 
   } catch (error) {
     return res.status(statusCodes.serverError)
@@ -135,6 +145,105 @@ const addProduct = async (req, res) => {
   }
 };
 
+
+// Upload Data using excel 
+
+const importProductsFromExcel = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).send({ result: false, message: 'No Excel file uploaded' });
+    }
+
+    const workbook = xlsx.readFile(req.file.path);
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = xlsx.utils.sheet_to_json(sheet);
+
+    for (const row of rows) {
+      let {
+        Segment,
+        Variant,
+        ArticleName,
+        Gender,
+        Colors,
+        Sizes,
+        ImagePaths
+      } = row;
+
+      Segment = Segment?.trim().toLowerCase();
+      Variant = Variant?.trim().toLowerCase();
+      ArticleName = ArticleName?.trim().toLowerCase();
+
+      // --- Colors logic with allColorsAvailable check
+      let isAllColorsAvailable = false;
+      let formattedColors = Colors
+        ? Colors.split(',').map(c => c.trim().toLowerCase()).filter(Boolean)
+        : [];
+
+      if (formattedColors.includes("all colors")) {
+        isAllColorsAvailable = true;
+        formattedColors = [];
+      }
+
+      const formattedSizes = Sizes
+        ? Sizes.split(',').map(s => s.trim())
+        : [];
+
+      const localPaths = ImagePaths
+        ? ImagePaths.split(',').map(p => p.trim())
+        : [];
+
+      const imageUrls = [];
+
+      for (const localPath of localPaths) {
+        const resolvedPath = path.resolve(localPath);
+        const result = await uploadOnCloudinary(resolvedPath);
+        imageUrls.push(result.secure_url);
+      }
+
+      const newArticle = {
+        name: ArticleName,
+        colors: formattedColors,
+        sizes: formattedSizes,
+        images: imageUrls,
+        gender: Gender?.trim().toLowerCase(),
+        allColorsAvailable: isAllColorsAvailable
+      };
+
+      let existingSegment = await productModel.findOne({ segment: Segment });
+
+      if (!existingSegment) {
+        await productModel.create({
+          segment: Segment,
+          variants: [{
+            name: Variant,
+            articles: [newArticle]
+          }]
+        });
+      } else {
+        const variantIndex = existingSegment.variants.findIndex(v => v.name === Variant);
+
+        if (variantIndex === -1) {
+          existingSegment.variants.push({
+            name: Variant,
+            articles: [newArticle]
+          });
+        } else {
+          existingSegment.variants[variantIndex].articles.push(newArticle);
+        }
+
+        await existingSegment.save();
+      }
+    }
+
+    fs.unlinkSync(req.file.path);
+
+    res.status(201).send({ result: true, message: 'Excel data imported successfully' });
+
+  } catch (err) {
+    console.error('Import error:', err);
+    res.status(500).send({ result: false, message: 'Failed to import products', error: err });
+  }
+};
 
 
 // DELETE /api/v1/admin/products/deleteproduct/:productid
@@ -490,5 +599,5 @@ const getCategories = async (req,res) => {
 
 
 
-export {addProduct, deleteProduct, getAllProdcuts, addBestDeals, getDeals, deleteDeals, updateDeal, getPurchases, markPurchaseConfirm, addCategories, getCategories}
+export {addProduct,importProductsFromExcel ,deleteProduct, getAllProdcuts, addBestDeals, getDeals, deleteDeals, updateDeal, getPurchases, markPurchaseConfirm, addCategories, getCategories}
 

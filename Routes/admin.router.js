@@ -1,7 +1,7 @@
 import express from "express";
 import { register, getAdmin, addDistributor, getDistributors, updateDistributor, deleteDistributor, generateOrderPerforma, addFestivleImage} from "../Controllers/Admin/admin.controllers.js";
 import adminAuth from "../MIddlewares/adminauth.middleware.js";
-import { addProduct, deleteProduct, getAllProdcuts, addBestDeals, deleteDeals, getDeals, getPurchases, markPurchaseConfirm, updateDeal, addCategories, getCategories } from "../Controllers/Admin/products.controllers.js";
+import { addProduct,importProductsFromExcel ,deleteProduct, getAllProdcuts, addBestDeals, deleteDeals, getDeals, getPurchases, markPurchaseConfirm, updateDeal, addCategories, getCategories } from "../Controllers/Admin/products.controllers.js";
 import upload from "../MIddlewares/multer.middleware.js";
 import multer from "multer";
 
@@ -29,6 +29,7 @@ adminRouter.post("/register", register)
 .get("/products/category/get", getCategories)
 .get("/orders/view-performa/:orderId", generateOrderPerforma)
 .post("/festival/upload", upload.single('images'), addFestivleImage)
+.post("/products/import-excel", upload.single('excel'), importProductsFromExcel);
 
 
 export default adminRouter

@@ -12,7 +12,8 @@ const articleSchema = new Schema({
   deal: {
     minQuantity: String,
     reward: String
-  }
+  },
+  allColorsAvailable: { type: Boolean, default: false },
 });
 
 const variantSchema = new Schema({
