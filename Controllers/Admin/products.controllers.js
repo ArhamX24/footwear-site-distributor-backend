@@ -197,7 +197,7 @@ const importProductsFromExcel = async (req, res) => {
       for (const localPath of localPaths) {
         const resolvedPath = path.resolve(localPath);
         const result = await uploadOnCloudinary(resolvedPath);
-        imageUrls.push(result.secure_url);
+        imageUrls.push(result?.secure_url);
       }
 
       const newArticle = {
