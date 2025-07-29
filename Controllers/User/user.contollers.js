@@ -309,7 +309,6 @@ const getAllProducts = async (req, res) => {
     });
 
   } catch (err) {
-    console.error(err);
     res.status(500).json({ result: false, message: "Error fetching products" });
   }
 };
@@ -339,7 +338,6 @@ const fetchFilters = async (req, res) => {
       data: { segments, variants: variantNames },
     });
   } catch (error) {
-    console.error("Error fetching filters:", error);
     res.status(500).json({
       result: false,
       message: "Error fetching filters",
@@ -381,7 +379,6 @@ const fetchProductData = async (req, res) => {
       data: { segment, articles, variants },
     });
   } catch (error) {
-    console.error("Error in fetchProductData:", error);
     return res.status(statusCodes.serverError).json({
       result: false,
       message: "Error fetching Products Data",
@@ -401,7 +398,7 @@ const fetchAllDealsImages = async (req,res) => {
       }
     ])    
 
-    if(!dealsImages){
+    if(dealsImages == []){
       return res.status(statusCodes.badRequest).send({result: false, message: "No Deals Images Found"})
     }
 

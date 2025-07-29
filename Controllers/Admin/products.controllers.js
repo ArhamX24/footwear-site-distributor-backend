@@ -170,8 +170,8 @@ const importProductsFromExcel = async (req, res) => {
       } = row;
 
       Segment = Segment?.trim().toLowerCase();
-      Variant = Variant?.trim().toLowerCase();
-      ArticleName = ArticleName?.trim().toLowerCase();
+      Variant = typeof(Variant) == 'string' ? Variant?.trim().toLowerCase() : Variant ;
+      ArticleName = typeof(ArticleName) == 'string' ? ArticleName?.trim().toLowerCase() : ArticleName;
 
       // --- Colors logic with allColorsAvailable check
       let isAllColorsAvailable = false;
@@ -240,7 +240,6 @@ const importProductsFromExcel = async (req, res) => {
     res.status(201).send({ result: true, message: 'Excel data imported successfully' });
 
   } catch (err) {
-    console.error('Import error:', err);
     res.status(500).send({ result: false, message: 'Failed to import products', error: err });
   }
 };
@@ -291,7 +290,6 @@ const deleteProduct = async (req, res) => {
       .status(statusCodes.success)
       .send({ result: true, message: "Article deleted" });
   } catch (error) {
-    console.error("Delete Error:", error);
     return res
       .status(statusCodes.serverError)
       .send({
@@ -336,7 +334,6 @@ const getAllProdcuts = async (req, res) => {
       data: articles,
     });
   } catch (error) {
-    console.error("Get Articles Error:", error);
     return res
       .status(statusCodes.serverError)
       .send({
@@ -428,30 +425,39 @@ const addBestDeals = async (req,res) => {
     }
 }
 
-const getDeals = async (req,res) => {
-    try {
-        let allDeals = await dealsModel.find({})
-
-        if(!allDeals){
-          return res.status(statusCodes.success).send({result: false, message: "Deals Not Found or Not Added Yet"})
-        }
-
-        let festiveImages = await Festive.find({}, "image"); // ✅ Select only image field
-
-        let imageUrls = festiveImages.map((festival) => festival.image);
-
-        let allImages = [...imageUrls,]
-
-        allDeals.forEach((item)=>{
-          allImages.push(item.image)
-        })        
-          
-        return res.status(statusCodes.success).send({result: true, message: "Found All Deals", data: allDeals, images: allImages})
-    } catch (error) {
-      console.error(error)
-        return res.status(statusCodes.serverError).send({result: false, message: "Error in Getting Deals. Please Try Again Later"})
+const getDeals = async (req, res) => {
+  try {
+    const allDeals = await dealsModel.find({});
+    
+    // Check if deals were found
+    if (!allDeals.length) {
+      return res.status(statusCodes.success).send({
+        result: false,
+        message: "Deals Not Found or Not Added Yet"
+      });
     }
-}
+
+    // Get only 'image' field from festive docs
+    const festiveImages = await Festive.find({}, "image");
+    const imageUrls = festiveImages.map(festival => festival.image);
+
+    // Merge festive and deal images
+    const dealImages = allDeals.map(deal => deal.image);
+    const allImages = [...imageUrls, ...dealImages];
+
+    return res.status(statusCodes.success).send({
+      result: true,
+      message: "Found All Deals",
+      data: allDeals,
+      images: allImages
+    });
+  } catch (error) {
+    return res.status(statusCodes.serverError).send({
+      result: false,
+      message: "Error in Getting Deals. Please Try Again Later"
+    });
+  }
+};
 
 const deleteDeals = async (req,res) => {
     try {
