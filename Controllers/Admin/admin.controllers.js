@@ -633,7 +633,7 @@ const scanQRCode = async (req, res) => {
     const {
       scannedBy,
       location,
-      event = 'verification',
+      event,
       userAgent,
       ipAddress,
       notes
@@ -645,16 +645,15 @@ const scanQRCode = async (req, res) => {
       return res.status(404).json({ result: false, message: "QR code not found" });
     }
 
-    // Check scan event validity to prevent double 'received' or 'shipped' without each other
     const scans = qrCode.scans || [];
 
     // Check if already received and trying to receive again
     if (event === 'received') {
       const receivedBefore = scans.some(s => s.event === 'received');
       if (receivedBefore) {
-        return res.status(400).json({ 
-          result: false, 
-          message: "This QR code has already been received. Cannot receive again without shipping first." 
+        return res.status(400).json({
+          result: false,
+          message: "This QR code has already been received. Cannot receive again without shipping first."
         });
       }
     }
@@ -665,21 +664,21 @@ const scanQRCode = async (req, res) => {
       const shippedBefore = scans.some(s => s.event === 'shipped');
 
       if (!receivedBefore) {
-        return res.status(400).json({ 
-          result: false, 
-          message: "Cannot ship a product that has not been received." 
+        return res.status(400).json({
+          result: false,
+          message: "Cannot ship a product that has not been received."
         });
       }
 
       if (shippedBefore) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           result: false,
           message: "This QR code has already been shipped. Cannot ship again without receiving first."
         });
       }
     }
 
-    // Add the new scan record
+    // Now safe to proceed adding scan
     const scanRecord = {
       scannedAt: new Date(),
       scannedBy: {
@@ -700,8 +699,7 @@ const scanQRCode = async (req, res) => {
 
     await qrCode.save();
 
-    // Update Product scannedHistory & Inventory accordingly
-    // Update scannedHistory on Product article
+    // Update Product scannedHistory on Product article
     const productUpdate = {
       $push: {
         'variants.$[variant].articles.$[article].scannedHistory': {
@@ -726,20 +724,9 @@ const scanQRCode = async (req, res) => {
       }
     );
 
-    const eventAlreadyRecorded = qrCode.scans.some(s => s.event === event);
-
-    if (eventAlreadyRecorded) {
-    return res.status(400).json({
-        result: false,
-        message: `This QR code has already been ${event}.`
-    });
-    }
-
-
     // Inventory update
     const inventory = await Inventory.findOne({ productId: qrCode.productId });
     if (event === 'received') {
-      // Add to inventory or create if none
       if (inventory) {
         inventory.quantity += 1;
         await inventory.save();
@@ -747,7 +734,6 @@ const scanQRCode = async (req, res) => {
         await Inventory.create({ productId: qrCode.productId, quantity: 1 });
       }
     } else if (event === 'shipped') {
-      // Remove from inventory but prevent quantity < 0
       if (!inventory || inventory.quantity <= 0) {
         return res.status(400).json({
           result: false,
@@ -783,6 +769,7 @@ const scanQRCode = async (req, res) => {
     });
   }
 };
+
 
 
 const getQRStatistics = async (req, res) => {
