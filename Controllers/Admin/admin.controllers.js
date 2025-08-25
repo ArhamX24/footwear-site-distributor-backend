@@ -902,8 +902,11 @@ const getInventoryData = async (req, res) => {
       result: true,
       message: 'Inventory and product data retrieved',
       data: {
-        inventoryCount: inventory ? inventory.quantity : 0,
-        product
+        inventoryCount: inventory ? inventory.totalQuantity : 0,
+        availableQuantity: inventory ? inventory.availableQuantity : 0,
+        inventoryItems: inventory ? inventory.items : [],
+        product,
+        lastUpdated: inventory ? inventory.lastUpdated : null
       }
     });
   } catch (error) {
@@ -916,6 +919,7 @@ const getInventoryData = async (req, res) => {
   }
 };
 
+
 const getSingleProductInventory = async (req, res) => {
   try {
     const { productId } = req.params;
@@ -927,8 +931,10 @@ const getSingleProductInventory = async (req, res) => {
       });
     }
 
-    // Get inventory for the specific product
-    const inventory = await Inventory.findOne({ productId });
+    // Get inventory for the specific product with populated QR codes
+    const inventory = await Inventory.findOne({ productId })
+      .populate('items.qrCodeId', 'uniqueId status totalScans')
+      .lean();
 
     // Get full product data
     const product = await Product.findById(productId).lean();
@@ -940,13 +946,27 @@ const getSingleProductInventory = async (req, res) => {
       });
     }
 
+    // Group items by article name for better display
+    const itemsByArticle = {};
+    if (inventory && inventory.items) {
+      inventory.items.forEach(item => {
+        if (!itemsByArticle[item.articleName]) {
+          itemsByArticle[item.articleName] = [];
+        }
+        itemsByArticle[item.articleName].push(item);
+      });
+    }
+
     return res.status(200).json({
       result: true,
       message: 'Product inventory data retrieved successfully',
       data: {
-        inventoryCount: inventory ? inventory.quantity : 0,
+        inventoryCount: inventory ? inventory.totalQuantity : 0,
+        availableQuantity: inventory ? inventory.availableQuantity : 0,
+        inventoryItems: inventory ? inventory.items : [],
+        itemsByArticle,
         product: product,
-        lastUpdated: inventory ? inventory.updatedAt : null
+        lastUpdated: inventory ? inventory.lastUpdated : null
       }
     });
 
@@ -959,6 +979,49 @@ const getSingleProductInventory = async (req, res) => {
     });
   }
 };
+
+const getAllInventory = async (req, res) => {
+  try {
+    // Get all inventory records with populated product data
+    const inventories = await Inventory.find({})
+      .populate('productId', 'segment title category brand')
+      .lean();
+
+    const inventoryData = inventories.map(inventory => ({
+      productId: inventory.productId._id,
+      product: inventory.productId,
+      inventoryCount: inventory.totalQuantity,
+      availableQuantity: inventory.availableQuantity,
+      totalItems: inventory.items.length,
+      lastUpdated: inventory.lastUpdated,
+      // Group items by status for quick overview
+      statusBreakdown: inventory.items.reduce((acc, item) => {
+        acc[item.status] = (acc[item.status] || 0) + 1;
+        return acc;
+      }, {}),
+      // Article breakdown
+      articleBreakdown: inventory.items.reduce((acc, item) => {
+        acc[item.articleName] = (acc[item.articleName] || 0) + 1;
+        return acc;
+      }, {})
+    }));
+
+    return res.status(200).json({
+      result: true,
+      message: 'All inventory data retrieved successfully',
+      data: inventoryData
+    });
+
+  } catch (error) {
+    console.error('Error fetching all inventory data:', error);
+    res.status(500).json({
+      result: false,
+      message: 'Failed to get all inventory data',
+      error: error.message
+    });
+  }
+};
+
 
 
 const getQRStatistics = async (req, res) => {
@@ -1048,4 +1111,4 @@ const getQRStatistics = async (req, res) => {
 };
 
 
-export {register, login, getAdmin, addDistributor, deleteDistributor, getDistributors, updateDistributor, generateOrderPerforma, addFestivleImage, getFestivleImages, generateQRCodes, downloadQRCodes, scanQRCode, getQRStatistics, getInventoryData, getSingleProductInventory}
+export {register, login, getAdmin, addDistributor, deleteDistributor, getDistributors, updateDistributor, generateOrderPerforma, addFestivleImage, getFestivleImages, generateQRCodes, downloadQRCodes, scanQRCode, getQRStatistics, getInventoryData, getSingleProductInventory, getAllInventory}
