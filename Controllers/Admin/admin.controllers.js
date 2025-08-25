@@ -639,26 +639,28 @@ const scanQRCode = async (req, res) => {
       notes
     } = req.body;
 
-    const qrCode = await QRCode.findOne({ uniqueId });
+    const qrCode = await QRCode.findOne({ uniqueId }).populate('productId');
 
     if (!qrCode) {
-      return res.status(404).json({ result: false, message: "QR code not found" });
+      return res.status(404).json({ 
+        result: false, 
+        message: "QR code not found or invalid QR" 
+      });
     }
 
     const scans = qrCode.scans || [];
 
-    // Check if already received and trying to receive again
+    // Prevent double receive or ship without correct ordering
     if (event === 'received') {
       const receivedBefore = scans.some(s => s.event === 'received');
       if (receivedBefore) {
         return res.status(400).json({
           result: false,
-          message: "This QR code has already been received. Cannot receive again without shipping first."
+          message: "This QR code has already been received"
         });
       }
     }
 
-    // Check if shipped without being received first
     if (event === 'shipped') {
       const receivedBefore = scans.some(s => s.event === 'received');
       const shippedBefore = scans.some(s => s.event === 'shipped');
@@ -669,16 +671,14 @@ const scanQRCode = async (req, res) => {
           message: "Cannot ship a product that has not been received."
         });
       }
-
       if (shippedBefore) {
         return res.status(400).json({
           result: false,
-          message: "This QR code has already been shipped. Cannot ship again without receiving first."
+          message: "This QR code has already been shipped"
         });
       }
     }
 
-    // Now safe to proceed adding scan
     const scanRecord = {
       scannedAt: new Date(),
       scannedBy: {
@@ -697,52 +697,158 @@ const scanQRCode = async (req, res) => {
     qrCode.lastScannedAt = new Date();
     if (qrCode.totalScans === 1) qrCode.status = 'scanned';
 
-    await qrCode.save();
-
-    // Update Product scannedHistory on Product article
-    const productUpdate = {
-      $push: {
-        'variants.$[variant].articles.$[article].scannedHistory': {
-          qrCodeId: qrCode._id,
-          scannedAt: new Date(),
-          scannedBy: scannedBy?.userId,
-          event,
-          location: location?.address,
-          notes
+    // Handle inventory operations
+    if (event === 'received') {
+      // Get article details from the product
+      const product = qrCode.productId;
+      let articleDetails = null;
+      
+      // Find the specific article details
+      for (const variant of product.variants || []) {
+        const article = variant.articles?.find(art => art.name === qrCode.articleName);
+        if (article) {
+          articleDetails = article;
+          break;
         }
       }
-    };
 
-    await Product.findOneAndUpdate(
-      { _id: qrCode.productId, 'variants.articles.name': qrCode.articleName },
-      productUpdate,
-      {
-        arrayFilters: [
-          { 'variant.articles.name': qrCode.articleName },
-          { 'article.name': qrCode.articleName }
-        ]
-      }
-    );
-
-    // Inventory update
-    const inventory = await Inventory.findOne({ productId: qrCode.productId });
-    if (event === 'received') {
-      if (inventory) {
-        inventory.quantity += 1;
-        await inventory.save();
-      } else {
-        await Inventory.create({ productId: qrCode.productId, quantity: 1 });
-      }
-    } else if (event === 'shipped') {
-      if (!inventory || inventory.quantity <= 0) {
+      if (!articleDetails) {
         return res.status(400).json({
           result: false,
-          message: "Cannot ship product: insufficient inventory."
+          message: "Article details not found in product variants"
         });
       }
-      inventory.quantity -= 1;
+
+      // Add to inventory
+      let inventory = await Inventory.findOne({ productId: qrCode.productId });
+      
+      if (!inventory) {
+        inventory = new Inventory({
+          productId: qrCode.productId,
+          items: []
+        });
+      }
+
+      // Add the new item to inventory
+      inventory.items.push({
+        qrCodeId: qrCode._id,
+        uniqueId: qrCode.uniqueId,
+        articleName: qrCode.articleName,
+        articleDetails: articleDetails,
+        receivedAt: new Date(),
+        receivedBy: {
+          userId: scannedBy?.userId,
+          userType: scannedBy?.userType
+        },
+        receivedLocation: location,
+        status: 'received',
+        notes
+      });
+
       await inventory.save();
+
+      // Update Product scannedHistory
+      await Product.findOneAndUpdate(
+        { _id: qrCode.productId, 'variants.articles.name': qrCode.articleName },
+        {
+          $push: {
+            'variants.$[variant].articles.$[article].scannedHistory': {
+              qrCodeId: qrCode._id,
+              scannedAt: new Date(),
+              scannedBy: scannedBy?.userId,
+              event,
+              location: location?.address,
+              notes
+            }
+          }
+        },
+        {
+          arrayFilters: [
+            { 'variant.articles.name': qrCode.articleName },
+            { 'article.name': qrCode.articleName }
+          ]
+        }
+      );
+
+      await qrCode.save();
+
+      return res.status(200).json({
+        result: true,
+        message: "QR code received and added to inventory successfully",
+        data: {
+          qrCode: {
+            uniqueId: qrCode.uniqueId,
+            status: qrCode.status,
+            totalScans: qrCode.totalScans,
+            firstScannedAt: qrCode.firstScannedAt,
+            lastScannedAt: qrCode.lastScannedAt
+          },
+          inventory: {
+            totalQuantity: inventory.totalQuantity,
+            availableQuantity: inventory.availableQuantity
+          },
+          scanDetails: scanRecord
+        }
+      });
     }
+
+    if (event === 'shipped') {
+      // Find and remove the specific item from inventory
+      const inventory = await Inventory.findOne({ productId: qrCode.productId });
+      
+      if (!inventory) {
+        return res.status(400).json({
+          result: false,
+          message: "No inventory found for this product."
+        });
+      }
+
+      const itemIndex = inventory.items.findIndex(item => 
+        item.qrCodeId.toString() === qrCode._id.toString()
+      );
+
+      if (itemIndex === -1) {
+        return res.status(400).json({
+          result: false,
+          message: "Item not found in inventory. Cannot ship."
+        });
+      }
+
+      // Remove the specific item from inventory
+      inventory.items.splice(itemIndex, 1);
+      await inventory.save();
+
+      // Remove scannedHistory entry for this qrCode from Product articles
+      await Product.findOneAndUpdate(
+        { _id: qrCode.productId },
+        {
+          $pull: {
+            'variants.$[].articles.$[].scannedHistory': { qrCodeId: qrCode._id }
+          }
+        }
+      );
+
+      // Delete the QRCode document itself
+      await QRCode.deleteOne({ _id: qrCode._id });
+
+      return res.status(200).json({
+        result: true,
+        message: "QR code scanned and shipped successfully",
+        data: {
+          inventory: {
+            totalQuantity: inventory.totalQuantity,
+            availableQuantity: inventory.availableQuantity
+          },
+          shippedItem: {
+            uniqueId: qrCode.uniqueId,
+            articleName: qrCode.articleName
+          }
+        }
+      });
+    }
+
+    // For other events, just save the qrCode
+    await qrCode.save();
 
     return res.status(200).json({
       result: true,
@@ -755,8 +861,7 @@ const scanQRCode = async (req, res) => {
           firstScannedAt: qrCode.firstScannedAt,
           lastScannedAt: qrCode.lastScannedAt
         },
-        scanDetails: scanRecord,
-        inventory: inventory ? inventory.quantity : (event === 'received' ? 1 : 0)
+        scanDetails: scanRecord
       }
     });
 
@@ -770,6 +875,90 @@ const scanQRCode = async (req, res) => {
   }
 };
 
+
+const getInventoryData = async (req, res) => {
+  try {
+    const productId = req.params.productId || req.query.productId;
+    if (!productId) {
+      return res.status(400).json({
+        result: false,
+        message: 'Product ID is required'
+      });
+    }
+
+    // Get inventory for product
+    const inventory = await Inventory.findOne({ productId });
+
+    // Get full product data
+    const product = await Product.findById(productId).lean();
+    if (!product) {
+      return res.status(404).json({
+        result: false,
+        message: 'Product not found'
+      });
+    }
+
+    return res.status(200).json({
+      result: true,
+      message: 'Inventory and product data retrieved',
+      data: {
+        inventoryCount: inventory ? inventory.quantity : 0,
+        product
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching inventory data:', error);
+    res.status(500).json({
+      result: false,
+      message: 'Failed to get inventory data',
+      error: error.message
+    });
+  }
+};
+
+const getSingleProductInventory = async (req, res) => {
+  try {
+    const { productId } = req.params;
+    
+    if (!productId) {
+      return res.status(400).json({
+        result: false,
+        message: 'Product ID is required'
+      });
+    }
+
+    // Get inventory for the specific product
+    const inventory = await Inventory.findOne({ productId });
+
+    // Get full product data
+    const product = await Product.findById(productId).lean();
+    
+    if (!product) {
+      return res.status(404).json({
+        result: false,
+        message: 'Product not found'
+      });
+    }
+
+    return res.status(200).json({
+      result: true,
+      message: 'Product inventory data retrieved successfully',
+      data: {
+        inventoryCount: inventory ? inventory.quantity : 0,
+        product: product,
+        lastUpdated: inventory ? inventory.updatedAt : null
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching single product inventory:', error);
+    res.status(500).json({
+      result: false,
+      message: 'Failed to get product inventory data',
+      error: error.message
+    });
+  }
+};
 
 
 const getQRStatistics = async (req, res) => {
@@ -859,4 +1048,4 @@ const getQRStatistics = async (req, res) => {
 };
 
 
-export {register, login, getAdmin, addDistributor, deleteDistributor, getDistributors, updateDistributor, generateOrderPerforma, addFestivleImage, getFestivleImages, generateQRCodes, downloadQRCodes, scanQRCode, getQRStatistics}
+export {register, login, getAdmin, addDistributor, deleteDistributor, getDistributors, updateDistributor, generateOrderPerforma, addFestivleImage, getFestivleImages, generateQRCodes, downloadQRCodes, scanQRCode, getQRStatistics, getInventoryData, getSingleProductInventory}
