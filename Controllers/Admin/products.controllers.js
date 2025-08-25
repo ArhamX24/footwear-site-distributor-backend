@@ -301,7 +301,6 @@ const deleteProduct = async (req, res) => {
 
 const getAllProdcuts = async (req, res) => {
   try {
-    // 1) fetch all products with their nested variants → articles
     const products = await productModel.find({});
     if (!products || products.length === 0) {
       return res
@@ -309,39 +308,42 @@ const getAllProdcuts = async (req, res) => {
         .send({ result: false, message: "No products found" });
     }
 
-    // 2) flatten every product.variants[].articles[] into one array,
-    //    carrying over each article's context + product.segment
+    // flatten to articles with context
     const articles = products.flatMap((product) =>
       (product.variants || []).flatMap((variant) =>
         (variant.articles || []).map((article) => ({
-          // article's own fields
           ...article.toObject(),
-          // context fields
           variantId: variant._id,
           variantName: variant.name,
           productId: product._id,
           productName: product.name || product.articleName,
-          segment: product.segment,          // ← include segment
+          segment: product.segment,
         }))
       )
     );
 
-    // 3) return that single, flattened article list
+    // group by segment
+    const grouped = articles.reduce((acc, article) => {
+      const seg = article.segment || "Unknown";
+      if (!acc[seg]) acc[seg] = [];
+      acc[seg].push(article);
+      return acc;
+    }, {});
+
     return res.status(statusCodes.success).send({
       result: true,
-      message: "Articles retrieved successfully",
       totalCount: articles.length,
-      data: articles,
+      groupedData: grouped,
+      data: articles
     });
   } catch (error) {
+    console.error(error);
     return res
       .status(statusCodes.serverError)
-      .send({
-        result: false,
-        message: "Error retrieving articles. Please try again later.",
-      });
+      .send({ result: false, message: "Internal Server Error" });
   }
 };
+
 
 const addBestDeals = async (req,res) => {
     try {
@@ -428,27 +430,18 @@ const addBestDeals = async (req,res) => {
 const getDeals = async (req, res) => {
   try {
     const allDeals = await dealsModel.find({});
-    
-    // Check if deals were found
-    if (!allDeals.length) {
-      return res.status(statusCodes.success).send({
-        result: false,
-        message: "Deals Not Found or Not Added Yet"
-      });
-    }
 
-    // Get only 'image' field from festive docs
+    // Get festive images regardless of deal presence
     const festiveImages = await Festive.find({}, "image");
     const imageUrls = festiveImages.map(festival => festival.image);
 
-    // Merge festive and deal images
     const dealImages = allDeals.map(deal => deal.image);
     const allImages = [...imageUrls, ...dealImages];
 
     return res.status(statusCodes.success).send({
       result: true,
-      message: "Found All Deals",
-      data: allDeals,
+      message: allDeals.length ? "Found All Deals" : "No Deals Added Yet",
+      data: allDeals, // always an array
       images: allImages
     });
   } catch (error) {
@@ -458,7 +451,6 @@ const getDeals = async (req, res) => {
     });
   }
 };
-
 const deleteDeals = async (req,res) => {
     try {
         let {productid} = req?.params;

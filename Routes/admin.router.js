@@ -1,5 +1,5 @@
 import express from "express";
-import { register, getAdmin, addDistributor, getDistributors, updateDistributor, deleteDistributor, generateOrderPerforma, addFestivleImage} from "../Controllers/Admin/admin.controllers.js";
+import { register, getAdmin, addDistributor, getDistributors, updateDistributor, deleteDistributor, generateOrderPerforma, addFestivleImage, generateQRCodes, downloadQRCodes, getQRStatistics, scanQRCode} from "../Controllers/Admin/admin.controllers.js";
 import adminAuth from "../MIddlewares/adminauth.middleware.js";
 import { addProduct,importProductsFromExcel ,deleteProduct, getAllProdcuts, addBestDeals, deleteDeals, getDeals, getPurchases, markPurchaseConfirm, updateDeal, addCategories, getCategories } from "../Controllers/Admin/products.controllers.js";
 import upload from "../MIddlewares/multer.middleware.js";
@@ -29,8 +29,10 @@ adminRouter.post("/register", register)
 .get("/products/category/get", getCategories)
 .get("/orders/view-performa/:orderId", generateOrderPerforma)
 .post("/festival/upload", upload.single('images'), addFestivleImage)
-.post("/products/import-excel", upload.single('excel'), importProductsFromExcel);
-
+.post("/products/import-excel", upload.single('excel'), importProductsFromExcel)
+.post("/qr/generate", adminAuth, generateQRCodes)
+.post("/qr/download", adminAuth, downloadQRCodes)
+.post("/qr/scan/:uniqueId", scanQRCode)
 
 export default adminRouter
 

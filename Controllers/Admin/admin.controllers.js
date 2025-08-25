@@ -8,7 +8,18 @@ import purchaseProductModel from "../../Models/Purchasedproduct.model.js";
 import finalOrderPerforma from "../../Utils/finalOrderPerforma.js";
 import Festive from "../../Models/Festivle.model.js";
 import { uploadOnCloudinary } from "../../Utils/cloudinary.js";
-import dealsModel from "../../Models/Deals.model.js";
+import QrCode from 'qrcode'
+import QRCodeLib from 'qrcode';
+import { v4 as uuidv4 } from 'uuid';
+import fs from 'fs';
+import path from 'path';
+import archiver from 'archiver';
+import { Product, QRCode, QRCode as QRCodeModel} from '../../Models/Product.model.js';
+import { dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const validationSchema = zod.object({
     phoneNo: zod
@@ -316,5 +327,520 @@ try {
   }
 }
 
+const generateQRCodes = async (req, res) => {
+  try {
+    const { articleId, articleName, variant, numberOfQRs, purpose = 'inventory' } = req.body;
+    const userId = req.user?.id;
 
-export {register, login, getAdmin, addDistributor, deleteDistributor, getDistributors, updateDistributor, generateOrderPerforma, addFestivleImage, getFestivleImages}
+    // Validate input
+    if (!articleId || !articleName || !numberOfQRs) {
+      return res.status(400).json({
+        result: false,
+        message: "Article ID, article name and number of QR codes are required"
+      });
+    }
+
+    if (numberOfQRs < 1 || numberOfQRs > 1000) {
+      return res.status(400).json({
+        result: false,
+        message: "Number of QR codes must be between 1 and 1000"
+      });
+    }
+
+    // Find product containing the article by articleId
+    const product = await Product.findOne({
+      'variants.articles._id': articleId
+    });
+
+    if (!product) {
+      return res.status(404).json({
+        result: false,
+        message: "Product containing the specified article not found"
+      });
+    }
+
+    // Find the article and variant in the product
+    let foundArticle = null;
+    let variantName = null;
+
+    for (const v of product.variants) {
+      const art = v.articles.find(a => a._id.toString() === articleId.toString());
+      if (art) {
+        foundArticle = art;
+        variantName = v.name;
+        break;
+      }
+    }
+
+    if (!foundArticle) {
+      return res.status(404).json({
+        result: false,
+        message: "Article not found in product"
+      });
+    }
+
+    const qrCodes = [];
+    const batchId = uuidv4();
+
+    // Create temporary directory for QR code images
+    const tempDir = path.join(process.cwd(), 'temp', 'qr-codes', batchId);
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    // Generate QR codes loop
+    for (let i = 0; i < numberOfQRs; i++) {
+      const uniqueId = uuidv4();
+
+      const qrDataObj = {
+        productId: product._id.toString(),
+        productName: articleName,
+        variant: variantName,
+        uniqueId,
+        batchId,
+        generatedAt: new Date().toISOString(),
+        serialNumber: i + 1,
+        purpose,
+        verifyUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify/${uniqueId}`
+      };
+
+      const qrString = JSON.stringify(qrDataObj);
+
+      // Generate base64 QR code image
+      const qrCodeDataURL = await QRCodeLib.toDataURL(qrString, {
+        width: 300,
+        margin: 2,
+        color: {
+          dark: '#000000',
+          light: '#FFFFFF'
+        },
+        errorCorrectionLevel: 'M'
+      });
+
+      // Save QR code image file
+      const fileName = `QR_${articleName.replace(/[^a-zA-Z0-9]/g, '_')}_${String(i + 1).padStart(4, '0')}_${uniqueId.slice(0, 8)}.png`;
+      const filePath = path.join(tempDir, fileName);
+      const base64Data = qrCodeDataURL.replace(/^data:image\/png;base64,/, '');
+
+      fs.writeFileSync(filePath, base64Data, 'base64');
+
+      // Save QR code document in DB
+      let qrDoc = new QRCode({
+        uniqueId,
+        productId: product._id,
+        variantName,
+        articleName,
+        qrData: qrString,
+        qrImagePath: filePath,
+        status: 'active',
+      });
+
+      await qrDoc.save();
+
+      qrCodes.push({
+        uniqueId,
+        qrCodeImage: qrCodeDataURL,
+        fileName,
+        filePath,
+        qrData: qrDataObj,
+        serialNumber: i + 1
+      });
+    }
+
+    // Update article's QR tracking stats
+    await Product.findOneAndUpdate(
+      { _id: product._id, 'variants.articles._id': articleId },
+      {
+        $inc: {
+          'variants.$[variant].articles.$[article].qrTracking.totalQRsGenerated': numberOfQRs,
+          'variants.$[variant].articles.$[article].qrTracking.activeQRs': numberOfQRs
+        },
+        $set: {
+          'variants.$[variant].articles.$[article].qrTracking.lastQRGenerated': new Date()
+        }
+      },
+      {
+        arrayFilters: [
+          { 'variant.articles._id': articleId },
+          { 'article._id': articleId }
+        ]
+      }
+    );
+
+    res.status(200).json({
+      result: true,
+      message: `Successfully generated ${numberOfQRs} QR codes`,
+      qrCodes,
+      batchId,
+      batchDetails: {
+        batchId,
+        articleName,
+        variantName,
+        numberOfQRs,
+        generatedAt: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('Error generating QR codes:', error);
+    res.status(500).json({
+      result: false,
+      message: "Failed to generate QR codes",
+      error: error.message
+    });
+  }
+};
+
+const downloadQRCodes = async (req, res) => {
+  try {
+    const { qrCodes, batchId } = req.body;
+
+    if (!qrCodes || !Array.isArray(qrCodes) || qrCodes.length === 0) {
+      return res.status(400).json({
+        result: false,
+        message: "QR codes data is required"
+      });
+    }
+
+    const tempDir = path.join(process.cwd(), 'temp', 'qr-codes');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const zipFileName = `QR_Codes_${batchId || 'Batch'}_${Date.now()}.zip`;
+    const zipFilePath = path.join(tempDir, zipFileName);
+
+    const output = fs.createWriteStream(zipFilePath);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+
+    output.on('close', () => {
+      console.log(`Archive created: ${archive.pointer()} total bytes`);
+
+      // Send the ZIP file for download
+      res.download(zipFilePath, zipFileName, (err) => {
+        if (err) {
+          console.error('Error sending file:', err);
+          res.status(500).end();
+          return;
+        }
+        // Cleanup after download
+        setTimeout(() => {
+          try {
+            if (fs.existsSync(zipFilePath)) fs.unlinkSync(zipFilePath);
+            qrCodes.forEach(qr => {
+              if (qr.filePath && fs.existsSync(qr.filePath)) {
+                fs.unlinkSync(qr.filePath);
+              }
+            });
+          } catch (cleanupErr) {
+            console.error('Cleanup error:', cleanupErr);
+          }
+        }, 5000);
+      });
+    });
+
+    archive.on('error', (err) => {
+      console.error('Archive error:', err);
+      res.status(500).json({
+        result: false,
+        message: "Failed to create zip archive",
+        error: err.message
+      });
+    });
+
+    archive.pipe(output);
+
+    // Add QR code images to archive
+    qrCodes.forEach(qr => {
+      if (qr.filePath && fs.existsSync(qr.filePath)) {
+        archive.file(qr.filePath, { name: qr.fileName });
+      } else if (qr.qrCodeImage) {
+        // If no file exists, add image from base64 string
+        const base64Data = qr.qrCodeImage.replace(/^data:image\/png;base64,/, '');
+        const buffer = Buffer.from(base64Data, 'base64');
+        archive.append(buffer, { name: qr.fileName });
+      }
+    });
+
+    // Add informational text file
+    const infoContent = `QR Code Batch Information
+========================
+Batch ID: ${batchId || 'N/A'}
+Total QR Codes: ${qrCodes.length}
+Generated On: ${new Date().toISOString()}
+
+QR Code Details:
+================
+${qrCodes.map((qr, idx) => {
+  let verifyUrl = 'N/A';
+  try {
+    verifyUrl = JSON.parse(qr.qrData)?.verifyUrl || 'N/A';
+  } catch { }
+  return `QR Code #${qr.serialNumber || idx + 1}:
+  File: ${qr.fileName}
+  Unique ID: ${qr.uniqueId || 'N/A'}
+  Verify URL: ${verifyUrl}
+${'='.repeat(50)}`;
+}).join('\n\n')}
+
+Instructions:
+=============
+1. Each QR code contains unique product information.
+2. Scan QR codes using any QR scanner or camera.
+3. Each scan is tracked.
+4. Use the Unique ID for manual verification.
+`;
+
+    archive.append(infoContent, { name: 'QR_Batch_Information.txt' });
+
+    // Add CSV file for easy import
+    const csvLines = [
+      'Serial Number,Unique ID,File Name,Product Name,Variant,Generated At',
+      ...qrCodes.map(qr => {
+        let data = {};
+        try {
+          data = JSON.parse(qr.qrData);
+        } catch { }
+        return [
+          qr.serialNumber || '',
+          qr.uniqueId || '',
+          `"${qr.fileName}"`,
+          `"${data.productName || ''}"`,
+          `"${data.variant || ''}"`,
+          `"${data.generatedAt || ''}"`
+        ].join(',');
+      })
+    ];
+    archive.append(csvLines.join('\n'), { name: 'QR_Codes_Data.csv' });
+
+    await archive.finalize();
+
+  } catch (error) {
+    console.error('Error downloading QR codes:', error);
+    res.status(500).json({
+      result: false,
+      message: 'Failed to download QR codes',
+      error: error.message
+    });
+  }
+};
+
+const scanQRCode = async (req, res) => {
+  try {
+    const { uniqueId } = req.params;
+    const { 
+      scannedBy, 
+      location, 
+      event = 'verification',
+      userAgent,
+      ipAddress,
+      notes
+    } = req.body;
+
+    const qrCode = await QRCode.findOne({ uniqueId });
+
+    if (!qrCode) {
+      return res.status(404).json({
+        result: false,
+        message: "QR code not found"
+      });
+    }
+
+    // Add scan record
+    const scanRecord = {
+      scannedAt: new Date(),
+      scannedBy: {
+        userId: scannedBy?.userId || 'anonymous',
+        userType: scannedBy?.userType || 'customer'
+      },
+      location,
+      device: { userAgent, ipAddress },
+      event,
+      notes
+    };
+
+    qrCode.scans.push(scanRecord);
+    qrCode.totalScans += 1;
+    if (!qrCode.firstScannedAt) qrCode.firstScannedAt = new Date();
+    qrCode.lastScannedAt = new Date();
+    // Optionally update status based on your business logic
+    if (qrCode.totalScans === 1) qrCode.status = 'scanned';
+
+    await qrCode.save();
+
+    // Update inventory quantity according to the scan event (entry/exit)
+    let quantityChange = 0;
+    if (event === 'received') quantityChange = 1;      // Entry to warehouse
+    else if (event === 'shipped') quantityChange = -1; // Exit from warehouse
+
+    let productUpdateResult = null;
+    if (quantityChange !== 0) {
+      productUpdateResult = await Product.findOneAndUpdate(
+        { 
+          _id: qrCode.productId, 
+          'variants.articles.name': qrCode.articleName 
+        },
+        {
+          $inc: { 
+            'variants.$[variant].articles.$[article].quantity': quantityChange
+          },
+          $push: {
+            'variants.$[variant].articles.$[article].scannedHistory': {
+              qrCodeId: qrCode._id,
+              scannedAt: new Date(),
+              scannedBy: scannedBy?.userId,
+              event,
+              location: location?.address,
+              notes
+            }
+          }
+        },
+        {
+          arrayFilters: [
+            { 'variant.articles.name': qrCode.articleName },
+            { 'article.name': qrCode.articleName }
+          ]
+        }
+      );
+    } else {
+      // Always log scan history, even if inventory does not change
+      await Product.findOneAndUpdate(
+        { 
+          _id: qrCode.productId, 
+          'variants.articles.name': qrCode.articleName 
+        },
+        {
+          $push: {
+            'variants.$[variant].articles.$[article].scannedHistory': {
+              qrCodeId: qrCode._id,
+              scannedAt: new Date(),
+              scannedBy: scannedBy?.userId,
+              event,
+              location: location?.address,
+              notes
+            }
+          }
+        },
+        {
+          arrayFilters: [
+            { 'variant.articles.name': qrCode.articleName },
+            { 'article.name': qrCode.articleName }
+          ]
+        }
+      );
+    }
+
+    res.status(200).json({
+      result: true,
+      message: "QR code scanned successfully",
+      data: {
+        qrCode: {
+          uniqueId: qrCode.uniqueId,
+          status: qrCode.status,
+          totalScans: qrCode.totalScans,
+          firstScannedAt: qrCode.firstScannedAt,
+          lastScannedAt: qrCode.lastScannedAt
+        },
+        scanDetails: scanRecord
+      }
+    });
+
+  } catch (error) {
+    console.error('Error scanning QR code:', error);
+    res.status(500).json({
+      result: false,
+      message: "Failed to process QR code scan",
+      error: error.message
+    });
+  }
+};
+
+
+const getQRStatistics = async (req, res) => {
+  try {
+    const { productId, articleName } = req.query;
+
+    let matchFilter = {};
+    if (productId) matchFilter.productId = mongoose.Types.ObjectId(productId);
+    if (articleName) matchFilter.articleName = articleName;
+
+    // Get overall statistics
+    const stats = await QRBatch.aggregate([
+      { $match: matchFilter },
+      {
+        $group: {
+          _id: null,
+          totalBatches: { $sum: 1 },
+          totalQRs: { $sum: '$numberOfQRs' },
+          totalScans: { $sum: '$stats.totalScans' },
+          activeQRs: { $sum: '$stats.activeQRs' },
+          scannedQRs: { $sum: '$stats.scannedQRs' }
+        }
+      }
+    ]);
+
+    // Get recent batches
+    const recentBatches = await QRBatch.find(matchFilter)
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .populate('productId', 'segment')
+      .populate('generatedBy', 'name email');
+
+    // Get scanning trends (last 30 days)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const scanTrends = await QRCodeModel.aggregate([
+      {
+        $match: {
+          ...matchFilter,
+          'scans.scannedAt': { $gte: thirtyDaysAgo }
+        }
+      },
+      { $unwind: '$scans' },
+      {
+        $match: {
+          'scans.scannedAt': { $gte: thirtyDaysAgo }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: {
+              format: '%Y-%m-%d',
+              date: '$scans.scannedAt'
+            }
+          },
+          scans: { $sum: 1 }
+        }
+      },
+      { $sort: { _id: 1 } }
+    ]);
+
+    res.status(200).json({
+      result: true,
+      data: {
+        overview: stats[0] || {
+          totalBatches: 0,
+          totalQRs: 0,
+          totalScans: 0,
+          activeQRs: 0,
+          scannedQRs: 0
+        },
+        recentBatches,
+        scanTrends
+      }
+    });
+
+  } catch (error) {
+    console.error('Error getting QR statistics:', error);
+    res.status(500).json({
+      result: false,
+      message: "Failed to retrieve QR statistics",
+      error: error.message
+    });
+  }
+};
+
+
+export {register, login, getAdmin, addDistributor, deleteDistributor, getDistributors, updateDistributor, generateOrderPerforma, addFestivleImage, getFestivleImages, generateQRCodes, downloadQRCodes, scanQRCode, getQRStatistics}
