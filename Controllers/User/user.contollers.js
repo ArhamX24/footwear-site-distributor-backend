@@ -14,7 +14,8 @@ let cookieOption = {
     path: "/",
     httpOnly: true,
     secure: true,
-    sameSite: 'Lax'
+    // sameSite: 'Lax'
+    sameSite: 'none'
 }
 
 const loginValidationSchema = zod.object({

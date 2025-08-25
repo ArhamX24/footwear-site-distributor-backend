@@ -8,7 +8,8 @@ let cookieOption = {
     path: "/",
     httpOnly: true,
     secure: true,
-    sameSite: 'Lax'
+    sameSite: 'none'
+    // sameSite: 'Lax'
 }
 
 const createNewRefreshToken = async (req, res) => {
