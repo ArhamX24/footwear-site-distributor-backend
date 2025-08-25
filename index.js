@@ -58,6 +58,7 @@ const processExpiredDeals = async () => {
       await dealsModel.deleteOne({ _id: deal._id });
     }
   } catch (error) {
+    console.error(error)
     console.error("Error processing expired deals:");
   }
 };

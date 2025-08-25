@@ -91,7 +91,7 @@ const qrCodeSchema = new Schema({
     },
     event: {
       type: String,
-      enum: ['verification', 'purchase', 'delivery', 'return', 'inspection'],
+      enum: ['received', 'shipped'],
       default: 'verification'
     },
     notes: String
