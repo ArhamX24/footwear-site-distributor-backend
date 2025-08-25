@@ -42,31 +42,31 @@ server.use("/api/v1/distributor", userRouter)
 
 
 // Function to process expired deals
-const processExpiredDeals = async () => {
-  try {
-    // Find all deals where expireAt has passed
-    const expiredDeals = await dealsModel.find({ expireAt: { $lt: new Date() } });
+// const processExpiredDeals = async () => {
+//   try {
+//     // Find all deals where expireAt has passed
+//     const expiredDeals = await dealsModel.find({ expireAt: { $lt: new Date() } });
     
-    for (const deal of expiredDeals) {
-      const articleId = deal.articleId;
-      if (articleId) {
-        await productModel.findByIdAndUpdate(articleId, {
-          $unset: { deal: '', indeal: false}
-        });
-      }
-      // Manually remove the deal document
-      await dealsModel.deleteOne({ _id: deal._id });
-    }
-  } catch (error) {
-    console.error(error)
-    console.error("Error processing expired deals:");
-  }
-};
+//     for (const deal of expiredDeals) {
+//       const articleId = deal.articleId;
+//       if (articleId) {
+//         await productModel.findByIdAndUpdate(articleId, {
+//           $unset: { deal: '', indeal: false}
+//         });
+//       }
+//       // Manually remove the deal document
+//       await dealsModel.deleteOne({ _id: deal._id });
+//     }
+//   } catch (error) {
+//     console.error(error)
+//     console.error("Error processing expired deals:");
+//   }
+// };
 
 // Schedule the job to run every minute
-cron.schedule("* * * * *", async () => {
-  await processExpiredDeals();
-});
+// cron.schedule("* * * * *", async () => {
+//   await processExpiredDeals();
+// });
 
 dbConnect()
   .then(() => {
