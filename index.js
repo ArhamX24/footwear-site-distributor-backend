@@ -9,10 +9,11 @@ import AuthRouter from "./Routes/auth.router.js";
 import cron from "node-cron";
 import dealsModel from "./Models/Deals.model.js";
 import productModel from "./Models/Product.model.js";
+import mongoose from "mongoose";
 
 const server = express()
 
-server.use(express.json())
+server.use(express.json());
 server.use(express.urlencoded({extended: true}))
 server.use(cookieParser())
 
@@ -41,32 +42,56 @@ server.use("/api/v1/admin", adminRouter)
 server.use("/api/v1/distributor", userRouter)
 
 
-// Function to process expired deals
-// const processExpiredDeals = async () => {
-//   try {
-//     // Find all deals where expireAt has passed
-//     const expiredDeals = await dealsModel.find({ expireAt: { $lt: new Date() } });
+const processExpiredDeals = async () => {
+  try {
+    // Find all deals where expireAt has passed
+    const expiredDeals = await dealsModel.find({ 
+      expireAt: { $lt: new Date() } 
+    });
+    for (const deal of expiredDeals) {
+      const articleId = deal.articleId;
+      
+      if (articleId) {
+        // Update the specific article in the nested structure
+        await productModel.updateOne(
+          { 
+            "variants.articles._id": articleId 
+          },
+          { 
+            $set: { 
+              "variants.$[].articles.$[article].indeal": false 
+            },
+            $unset: { 
+              "variants.$[].articles.$[article].deal": "" 
+            }
+          },
+          {
+            arrayFilters: [
+              { "article._id": articleId }
+            ]
+          }
+        );
+      }
+      
+      // Delete the expired deal
+      await dealsModel.deleteOne({ _id: deal._id });
+    }
     
-//     for (const deal of expiredDeals) {
-//       const articleId = deal.articleId;
-//       if (articleId) {
-//         await productModel.findByIdAndUpdate(articleId, {
-//           $unset: { deal: '', indeal: false}
-//         });
-//       }
-//       // Manually remove the deal document
-//       await dealsModel.deleteOne({ _id: deal._id });
-//     }
-//   } catch (error) {
-//     console.error(error)
-//     console.error("Error processing expired deals:");
-//   }
-// };
+    if (expiredDeals.length > 0) {
+      console.log(`Processed ${expiredDeals.length} expired deals`);
+    }
+    
+  } catch (error) {
+    console.error("Error processing expired deals:", error);
+  }
+};
 
-// Schedule the job to run every minute
-// cron.schedule("* * * * *", async () => {
-//   await processExpiredDeals();
-// });
+// // Run every minute
+cron.schedule("* * * * *", async () => {
+  await processExpiredDeals();
+});
+
+
 
 dbConnect()
   .then(() => {
@@ -74,8 +99,9 @@ dbConnect()
     console.log("Connected");
   })
   .catch((err) => {
+    console.error(err)
     console.error("Database connection failed:", err);
-  });
+});
 
 
 

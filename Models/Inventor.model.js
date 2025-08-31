@@ -1,4 +1,3 @@
-// inventory.model.js
 import mongoose from 'mongoose';
 
 const { Schema, model } = mongoose;
@@ -18,16 +17,31 @@ const inventoryItemSchema = new Schema({
     required: true
   },
   articleDetails: {
-    type: Schema.Types.Mixed, // Store complete article data
+    type: Schema.Types.Mixed,
     required: true
   },
-  receivedAt: {
-    type: Date,
-    required: true
+  
+  // Manufacturing stage
+  manufacturedAt: Date,
+  manufacturedBy: {
+    userId: String,
+    userType: String,
+    name: String
   },
+  manufacturingLocation: {
+    address: String,
+    coordinates: {
+      latitude: Number,
+      longitude: Number
+    }
+  },
+  
+  // Warehouse receipt stage
+  receivedAt: Date,
   receivedBy: {
     userId: String,
-    userType: String
+    userType: String,
+    name: String
   },
   receivedLocation: {
     address: String,
@@ -36,11 +50,38 @@ const inventoryItemSchema = new Schema({
       longitude: Number
     }
   },
+  
+  // Distributor shipment stage
+  shippedAt: Date,
+  shippedBy: {
+    userId: String,
+    userType: String,
+    name: String
+  },
+  distributorDetails: {
+    distributorId: { type: Schema.Types.ObjectId, ref: 'Distributor' },
+    distributorName: String,
+    trackingNumber: String
+  },
+  
   status: {
     type: String,
-    enum: ['received', 'in_stock', 'reserved', 'shipped'],
-    default: 'received'
+    enum: ['manufactured', 'in_warehouse', 'shipped_to_distributor', 'delivered', 'damaged', 'returned'],
+    default: 'manufactured'
   },
+  
+  // Journey tracking
+  lifecycle: [{
+    stage: {
+      type: String,
+      enum: ['manufactured', 'received_warehouse', 'shipped_distributor']
+    },
+    timestamp: Date,
+    location: String,
+    performedBy: String,
+    notes: String
+  }],
+  
   notes: String
 }, { timestamps: true });
 
@@ -56,12 +97,20 @@ const inventorySchema = new Schema({
     default: 0,
     min: 0
   },
+  
+  // Breakdown by lifecycle stage
+  quantityByStage: {
+    manufactured: { type: Number, default: 0 },
+    in_warehouse: { type: Number, default: 0 },
+    shipped_to_distributor: { type: Number, default: 0 }
+  },
+  
   availableQuantity: {
     type: Number,
     default: 0,
     min: 0
   },
-  items: [inventoryItemSchema], // Array of individual articles
+  items: [inventoryItemSchema],
   lastUpdated: {
     type: Date,
     default: Date.now
@@ -71,9 +120,21 @@ const inventorySchema = new Schema({
 // Update quantities before saving
 inventorySchema.pre('save', function(next) {
   this.totalQuantity = this.items.length;
-  this.availableQuantity = this.items.filter(item => 
-    item.status === 'received' || item.status === 'in_stock'
+  
+  // Calculate quantities by stage
+  this.quantityByStage.manufactured = this.items.filter(item => 
+    item.status === 'manufactured'
   ).length;
+  
+  this.quantityByStage.in_warehouse = this.items.filter(item => 
+    item.status === 'in_warehouse'
+  ).length;
+  
+  this.quantityByStage.shipped_to_distributor = this.items.filter(item => 
+    item.status === 'shipped_to_distributor'
+  ).length;
+  
+  this.availableQuantity = this.quantityByStage.in_warehouse;
   this.lastUpdated = new Date();
   next();
 });
@@ -82,6 +143,7 @@ inventorySchema.pre('save', function(next) {
 inventorySchema.index({ productId: 1 });
 inventorySchema.index({ 'items.qrCodeId': 1 });
 inventorySchema.index({ 'items.uniqueId': 1 });
+inventorySchema.index({ 'items.status': 1 });
 
 const Inventory = model('Inventory', inventorySchema);
 

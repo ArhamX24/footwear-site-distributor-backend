@@ -2,7 +2,6 @@ import mongoose from "mongoose";
 
 const { model, Schema } = mongoose;
 
-// Keep your existing nested product schema as-is
 const articleSchema = new Schema({
   name: { type: String, required: true },
   colors: [{ type: String }],
@@ -28,7 +27,7 @@ const articleSchema = new Schema({
     qrCodeId: { type: Schema.Types.ObjectId, ref: 'QRCode' },
     scannedAt: { type: Date, default: Date.now },
     scannedBy: String,
-    event: { type: String, enum: ['received', 'shipped', 'verified', 'damaged'] },
+    event: { type: String, enum: ['manufactured', 'received', 'shipped', 'verified', 'damaged'] },
     location: String,
     notes: String
   }],
@@ -36,6 +35,9 @@ const articleSchema = new Schema({
   qrTracking: {
     totalQRsGenerated: { type: Number, default: 0 },
     activeQRs: { type: Number, default: 0 },
+    manufacturedQRs: { type: Number, default: 0 },
+    receivedQRs: { type: Number, default: 0 },
+    shippedQRs: { type: Number, default: 0 },
     lastQRGenerated: { type: Date }
   }
 });
@@ -52,7 +54,7 @@ const productSchema = new Schema({
 
 const productModel = model("Product", productSchema);
 
-// Simplified QRCode schema that includes batch info within it
+// Updated QRCode schema
 const qrCodeSchema = new Schema({
   uniqueId: {
     type: String,
@@ -67,40 +69,108 @@ const qrCodeSchema = new Schema({
   },
   variantName: { type: String, required: true },
   articleName: { type: String, required: true },
-
-  // Combine batch info here if needed
-  batchId: { type: String },  // optional or generated per group
+  batchId: { type: String },
 
   qrData: {
-    type: String, // JSON stringified data or plain object if preferred
+    type: String,
     required: true
   },
-  qrImagePath: String, // path to saved QR image file or URL
+  qrImagePath: String,
 
+  // Updated status to track manufacturing lifecycle
   status: {
     type: String,
-    enum: ['active', 'scanned', 'damaged', 'expired', 'deactivated'],
-    default: 'active'
+    enum: ['generated', 'manufactured', 'received', 'shipped', 'damaged', 'expired', 'deactivated'],
+    default: 'generated'
+  },
+
+  // Manufacturing tracking
+  manufacturingDetails: {
+    manufacturedAt: Date,
+    manufacturedBy: {
+      userId: String,
+      userType: String,
+      name: String
+    },
+    manufacturingLocation: {
+      address: String,
+      coordinates: {
+        latitude: Number,
+        longitude: Number
+      }
+    },
+    qualityCheck: {
+      passed: { type: Boolean, default: false },
+      checkedBy: String,
+      notes: String
+    }
+  },
+
+  // Warehouse receipt tracking
+  warehouseDetails: {
+    receivedAt: Date,
+    receivedBy: {
+      userId: String,
+      userType: String,
+      name: String
+    },
+    warehouseLocation: {
+      address: String,
+      coordinates: {
+        latitude: Number,
+        longitude: Number
+      }
+    },
+    conditionOnReceipt: {
+      type: String,
+      enum: ['good', 'damaged', 'incomplete'],
+      default: 'good'
+    }
+  },
+
+  // Distributor shipment tracking
+  distributorDetails: {
+    shippedAt: Date,
+    shippedBy: {
+      userId: String,
+      userType: String,
+      name: String
+    },
+    distributorId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Distributor'
+    },
+    distributorName: String,
+    trackingNumber: String,
+    estimatedDelivery: Date
   },
 
   scans: [{
     scannedAt: { type: Date, default: Date.now },
     scannedBy: {
       userId: String,
-      userType: { type: String, enum: ['admin', 'customer', 'retailer'] }
+      userType: { type: String, enum: ['admin', 'manufacturer', 'warehouse', 'distributor', 'customer'] },
+      name: String
     },
     event: {
       type: String,
-      enum: ['received', 'shipped'],
-      default: 'verification'
+      enum: ['manufactured', 'received', 'shipped', 'quality_check', 'verification'],
+      required: true
     },
-    notes: String
+    location: {
+      address: String,
+      coordinates: {
+        latitude: Number,
+        longitude: Number
+      }
+    },
+    notes: String,
+    metadata: Schema.Types.Mixed // For additional scan-specific data
   }],
 
   totalScans: { type: Number, default: 0 },
   firstScannedAt: Date,
   lastScannedAt: Date,
-
   expiresAt: Date,
 
 }, { timestamps: true });
