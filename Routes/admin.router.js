@@ -76,7 +76,7 @@ adminRouter.post("/register", register)
 .post("/qr/generate", adminAuth, generateQRCodes)
 .post("/qr/download", adminAuth, downloadQRCodes)
 .post("/qr/scan/:uniqueId", scanQRCode)
-.get("/qr/statistics", adminAuth, getQRStatistics)
+.get("/qr/statistics", getQRStatistics)
 
 // Inventory management routes
 .get("/inventory/all", getAllInventory)

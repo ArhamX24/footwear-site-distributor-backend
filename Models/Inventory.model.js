@@ -98,7 +98,7 @@ const inventorySchema = new Schema({
     min: 0
   },
   
-  // Breakdown by lifecycle stage
+  // Breakdown by lifecycle stage - UPDATED TO CUMULATIVE COUNTS
   quantityByStage: {
     manufactured: { type: Number, default: 0 },
     in_warehouse: { type: Number, default: 0 },
@@ -117,24 +117,28 @@ const inventorySchema = new Schema({
   }
 }, { timestamps: true });
 
-// Update quantities before saving
+// ✅ UPDATED: Cumulative counting logic
 inventorySchema.pre('save', function(next) {
   this.totalQuantity = this.items.length;
   
-  // Calculate quantities by stage
+  // Calculate CUMULATIVE quantities by stage (items that have reached each stage)
   this.quantityByStage.manufactured = this.items.filter(item => 
-    item.status === 'manufactured'
-  ).length;
+    ['manufactured', 'in_warehouse', 'shipped_to_distributor', 'delivered'].includes(item.status)
+  ).length; // ✅ Count all items that have been manufactured (regardless of current status)
   
   this.quantityByStage.in_warehouse = this.items.filter(item => 
+    ['in_warehouse', 'shipped_to_distributor', 'delivered'].includes(item.status)
+  ).length; // ✅ Count all items that have reached warehouse (including shipped/delivered ones)
+  
+  this.quantityByStage.shipped_to_distributor = this.items.filter(item => 
+    ['shipped_to_distributor', 'delivered'].includes(item.status)
+  ).length; // ✅ Count all items that have been shipped to distributor
+  
+  // Available quantity is only items currently in warehouse
+  this.availableQuantity = this.items.filter(item => 
     item.status === 'in_warehouse'
   ).length;
   
-  this.quantityByStage.shipped_to_distributor = this.items.filter(item => 
-    item.status === 'shipped_to_distributor'
-  ).length;
-  
-  this.availableQuantity = this.quantityByStage.in_warehouse;
   this.lastUpdated = new Date();
   next();
 });

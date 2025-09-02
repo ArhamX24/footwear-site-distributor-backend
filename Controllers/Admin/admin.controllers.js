@@ -9,7 +9,7 @@ import finalOrderPerforma from "../../Utils/finalOrderPerforma.js";
 import Festive from "../../Models/Festivle.model.js";
 import { uploadOnCloudinary } from "../../Utils/cloudinary.js";
 import QrCode from 'qrcode'
-import Inventory from "../../Models/Inventor.model.js";
+import Inventory from "../../Models/Inventory.model.js";
 import QRCodeLib from 'qrcode';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
@@ -703,6 +703,7 @@ Distributor: Use the distributor URL for final scan
 };
 
 
+
 const scanQRCode = async (req, res) => {
   try {
     const { uniqueId } = req.params;
@@ -755,7 +756,7 @@ const scanQRCode = async (req, res) => {
       if (hasReceived) {
         return res.status(400).json({
           result: false,
-          message: "This QR code has already been received at warehouse"
+          message: "This Carton has already been received at warehouse"
         });
       }
     }
@@ -771,16 +772,28 @@ const scanQRCode = async (req, res) => {
       if (hasShipped) {
         return res.status(400).json({
           result: false,
-          message: "This QR code has already been shipped to distributor"
+          message: "This Carton has already been shipped to distributor"
         });
       }
     }
+
+    // Helper function to map userType to correct enum values
+    const mapUserType = (userType) => {
+      const userTypeMap = {
+        'manufacturing': 'manufacturer',
+        'warehouse': 'warehouse', 
+        'distributor': 'distributor',
+        'admin': 'admin',
+        'customer': 'customer'
+      };
+      return userTypeMap[userType] || 'admin';
+    };
 
     const scanRecord = {
       scannedAt: new Date(),
       scannedBy: {
         userId: scannedBy?.userId || 'anonymous',
-        userType: scannedBy?.userType || 'customer',
+        userType: mapUserType(scannedBy?.userType || 'admin'),
         name: scannedBy?.name
       },
       location,
@@ -807,7 +820,7 @@ const scanQRCode = async (req, res) => {
         manufacturedAt: new Date(),
         manufacturedBy: {
           userId: scannedBy?.userId,
-          userType: scannedBy?.userType,
+          userType: mapUserType(scannedBy?.userType || 'manufacturer'),
           name: scannedBy?.name
         },
         manufacturingLocation: location,
@@ -851,7 +864,7 @@ const scanQRCode = async (req, res) => {
         manufacturedAt: new Date(),
         manufacturedBy: {
           userId: scannedBy?.userId,
-          userType: scannedBy?.userType,
+          userType: mapUserType(scannedBy?.userType || 'manufacturer'),
           name: scannedBy?.name
         },
         manufacturingLocation: location,
@@ -868,7 +881,7 @@ const scanQRCode = async (req, res) => {
 
       await inventory.save();
 
-      // Update Product tracking
+      // ✅ FIXED: Only increment manufactured count
       await Product.findOneAndUpdate(
         { _id: qrCode.productId, 'variants.articles.name': qrCode.articleName },
         {
@@ -923,11 +936,11 @@ const scanQRCode = async (req, res) => {
         receivedAt: new Date(),
         receivedBy: {
           userId: scannedBy?.userId,
-          userType: scannedBy?.userType,
+          userType: mapUserType(scannedBy?.userType || 'warehouse'),
           name: scannedBy?.name
         },
         warehouseLocation: location,
-        conditionOnReceipt: 'good' // Could be passed in request
+        conditionOnReceipt: 'good'
       };
 
       // Update inventory item status
@@ -955,7 +968,7 @@ const scanQRCode = async (req, res) => {
       inventory.items[itemIndex].receivedAt = new Date();
       inventory.items[itemIndex].receivedBy = {
         userId: scannedBy?.userId,
-        userType: scannedBy?.userType,
+        userType: mapUserType(scannedBy?.userType || 'warehouse'),
         name: scannedBy?.name
       };
       inventory.items[itemIndex].receivedLocation = location;
@@ -970,12 +983,23 @@ const scanQRCode = async (req, res) => {
 
       await inventory.save();
 
-      // Update Product tracking
+      // ✅ FIXED: Transfer from manufactured to received (decrement manufactured, increment received)
       await Product.findOneAndUpdate(
         { _id: qrCode.productId, 'variants.articles.name': qrCode.articleName },
         {
+          $push: {
+            'variants.$[variant].articles.$[article].scannedHistory': {
+              qrCodeId: qrCode._id,
+              scannedAt: new Date(),
+              scannedBy: scannedBy?.name,
+              event,
+              location: location?.address,
+              notes
+            }
+          },
           $inc: {
-            'variants.$[variant].articles.$[article].qrTracking.receivedQRs': 1
+            'variants.$[variant].articles.$[article].qrTracking.manufacturedQRs': -1, // ✅ Remove from manufactured
+            'variants.$[variant].articles.$[article].qrTracking.receivedQRs': 1        // ✅ Add to received
           }
         },
         {
@@ -1016,7 +1040,7 @@ const scanQRCode = async (req, res) => {
         shippedAt: new Date(),
         shippedBy: {
           userId: scannedBy?.userId,
-          userType: scannedBy?.userType,
+          userType: mapUserType(scannedBy?.userType || 'warehouse'),
           name: scannedBy?.name
         },
         distributorId: distributorDetails?.distributorId,
@@ -1049,7 +1073,7 @@ const scanQRCode = async (req, res) => {
       inventory.items[itemIndex].shippedAt = new Date();
       inventory.items[itemIndex].shippedBy = {
         userId: scannedBy?.userId,
-        userType: scannedBy?.userType,
+        userType: mapUserType(scannedBy?.userType || 'warehouse'),
         name: scannedBy?.name
       };
       inventory.items[itemIndex].distributorDetails = {
@@ -1068,13 +1092,24 @@ const scanQRCode = async (req, res) => {
 
       await inventory.save();
 
-      // Update Product tracking
+      // ✅ FIXED: Transfer from received to shipped (decrement received, increment shipped)
       await Product.findOneAndUpdate(
         { _id: qrCode.productId, 'variants.articles.name': qrCode.articleName },
         {
+          $push: {
+            'variants.$[variant].articles.$[article].scannedHistory': {
+              qrCodeId: qrCode._id,
+              scannedAt: new Date(),
+              scannedBy: scannedBy?.name,
+              event,
+              location: location?.address,
+              notes
+            }
+          },
           $inc: {
-            'variants.$[variant].articles.$[article].qrTracking.shippedQRs': 1,
-            'variants.$[variant].articles.$[article].qrTracking.activeQRs': -1
+            'variants.$[variant].articles.$[article].qrTracking.receivedQRs': -1,    // ✅ Remove from received
+            'variants.$[variant].articles.$[article].qrTracking.shippedQRs': 1,     // ✅ Add to shipped
+            'variants.$[variant].articles.$[article].qrTracking.activeQRs': -1      // ✅ Reduce active count
           }
         },
         {
@@ -1136,6 +1171,10 @@ const scanQRCode = async (req, res) => {
     });
   }
 };
+
+
+
+
 
 const getInventoryData = async (req, res) => {
   try {
@@ -1208,6 +1247,7 @@ const getInventoryData = async (req, res) => {
 const getSingleProductInventory = async (req, res) => {
   try {
     const { productId } = req.params;
+    const { search = '', startDate, endDate, sort = 'dateDesc' } = req.query;
     
     if (!productId) {
       return res.status(400).json({
@@ -1238,61 +1278,125 @@ const getSingleProductInventory = async (req, res) => {
       });
     }
 
-    // Enhanced items processing with QR details
-    const itemsByArticle = {};
-    const qrStatsByArticle = {};
+    // Apply filters to inventory items
+    let items = inventory?.items || [];
     
-    if (inventory && inventory.items) {
-      inventory.items.forEach(item => {
-        const articleName = item.articleName;
+    // ✅ Apply search filter
+    if (search) {
+      const searchLower = search.toLowerCase();
+      items = items.filter(item => 
+        item.articleName?.toLowerCase().includes(searchLower) ||
+        item.uniqueId?.toLowerCase().includes(searchLower) ||
+        item.qrCodeDetails?.uniqueId?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    // ✅ Apply date range filter
+    if (startDate || endDate) {
+      items = items.filter(item => {
+        const itemDate = item.createdAt || item.manufacturedAt;
+        if (!itemDate) return true;
         
-        // Group items by article
-        if (!itemsByArticle[articleName]) {
-          itemsByArticle[articleName] = [];
-          qrStatsByArticle[articleName] = {
-            totalQRs: 0,
-            scannedQRs: 0,
-            totalScans: 0,
-            lastScanned: null
-          };
-        }
+        const date = new Date(itemDate);
+        const start = startDate ? new Date(startDate) : null;
+        const end = endDate ? new Date(endDate) : null;
         
-        // Enhanced item data with QR details
-        const itemWithQRDetails = {
-          ...item,
-          qrCodeDetails: item.qrCodeId ? {
-            uniqueId: item.qrCodeId.uniqueId,
-            status: item.qrCodeId.status,
-            totalScans: item.qrCodeId.totalScans,
-            createdAt: item.qrCodeId.createdAt,
-            lastScannedAt: item.qrCodeId.scans?.length > 0 
-              ? item.qrCodeId.scans[item.qrCodeId.scans.length - 1].scannedAt 
-              : null,
-            batchInfo: item.qrCodeId.batchId,
-            scanHistory: item.qrCodeId.scans || []
-          } : null
-        };
+        const afterStart = start ? date >= start : true;
+        const beforeEnd = end ? date <= end : true;
         
-        itemsByArticle[articleName].push(itemWithQRDetails);
+        return afterStart && beforeEnd;
+      });
+    }
+
+    // ✅ Apply sorting
+    if (sort) {
+      items.sort((a, b) => {
+        const dateA = new Date(a.createdAt || a.manufacturedAt);
+        const dateB = new Date(b.createdAt || b.manufacturedAt);
         
-        // Update QR statistics for this article
-        if (item.qrCodeId) {
-          qrStatsByArticle[articleName].totalQRs++;
-          qrStatsByArticle[articleName].totalScans += item.qrCodeId.totalScans || 0;
-          
-          if (item.qrCodeId.totalScans > 0) {
-            qrStatsByArticle[articleName].scannedQRs++;
-          }
-          
-          // Track last scanned date
-          const lastScanned = itemWithQRDetails.qrCodeDetails.lastScannedAt;
-          if (lastScanned && (!qrStatsByArticle[articleName].lastScanned || 
-              new Date(lastScanned) > new Date(qrStatsByArticle[articleName].lastScanned))) {
-            qrStatsByArticle[articleName].lastScanned = lastScanned;
-          }
+        switch (sort) {
+          case 'dateAsc':
+            return dateA - dateB;
+          case 'dateDesc':
+            return dateB - dateA;
+          case 'timeAsc':
+            return dateA - dateB;
+          case 'timeDesc':
+            return dateB - dateA;
+          default:
+            return dateB - dateA;
         }
       });
     }
+
+    // Enhanced items processing with QR details
+    const itemsByArticle = {};
+    const qrStatsByArticle = {};
+    const articleStatsByStatus = {}; // ✅ Current status counts per article
+    
+    items.forEach(item => {
+      const articleName = item.articleName;
+      
+      // Group items by article
+      if (!itemsByArticle[articleName]) {
+        itemsByArticle[articleName] = [];
+        qrStatsByArticle[articleName] = {
+          totalQRs: 0,
+          scannedQRs: 0,
+          totalScans: 0,
+          lastScanned: null
+        };
+        // ✅ Initialize with current status counts (not cumulative)
+        articleStatsByStatus[articleName] = {
+          manufactured: 0,
+          in_warehouse: 0,
+          shipped_to_distributor: 0,
+          delivered: 0,
+          damaged: 0,
+          returned: 0
+        };
+      }
+
+      // Enhanced item data with QR details
+      const itemWithQRDetails = {
+        ...item,
+        qrCodeDetails: item.qrCodeId ? {
+          uniqueId: item.qrCodeId.uniqueId,
+          status: item.qrCodeId.status,
+          totalScans: item.qrCodeId.totalScans,
+          createdAt: item.qrCodeId.createdAt,
+          lastScannedAt: item.qrCodeId.scans?.length > 0 
+            ? item.qrCodeId.scans[item.qrCodeId.scans.length - 1].scannedAt 
+            : null,
+          batchInfo: item.qrCodeId.batchId,
+          scanHistory: item.qrCodeId.scans || []
+        } : null
+      };
+      
+      itemsByArticle[articleName].push(itemWithQRDetails);
+      
+      // ✅ Count current status only
+      if (articleStatsByStatus[articleName].hasOwnProperty(item.status)) {
+        articleStatsByStatus[articleName][item.status]++;
+      }
+      
+      // Update QR statistics for this article
+      if (item.qrCodeId) {
+        qrStatsByArticle[articleName].totalQRs++;
+        qrStatsByArticle[articleName].totalScans += item.qrCodeId.totalScans || 0;
+        
+        if (item.qrCodeId.totalScans > 0) {
+          qrStatsByArticle[articleName].scannedQRs++;
+        }
+        
+        // Track last scanned date
+        const lastScanned = itemWithQRDetails.qrCodeDetails?.lastScannedAt;
+        if (lastScanned && (!qrStatsByArticle[articleName].lastScanned || 
+            new Date(lastScanned) > new Date(qrStatsByArticle[articleName].lastScanned))) {
+          qrStatsByArticle[articleName].lastScanned = lastScanned;
+        }
+      }
+    });
 
     return res.status(200).json({
       result: true,
@@ -1301,11 +1405,27 @@ const getSingleProductInventory = async (req, res) => {
         inventoryCount: inventory ? inventory.totalQuantity : 0,
         availableQuantity: inventory ? inventory.availableQuantity : 0,
         reservedQuantity: inventory ? inventory.reservedQuantity || 0 : 0,
-        inventoryItems: inventory ? inventory.items : [],
+        // ✅ Include cumulative counts from inventory schema for overall stats
+        quantityByStage: inventory ? inventory.quantityByStage : {
+          manufactured: 0,
+          in_warehouse: 0,
+          shipped_to_distributor: 0
+        },
+        inventoryItems: items, // ✅ Return filtered and sorted items
         itemsByArticle,
         qrStatsByArticle,
+        articleStatsByStatus, // ✅ Current status counts per article
         product: product,
-        lastUpdated: inventory ? inventory.lastUpdated : null
+        lastUpdated: inventory ? inventory.lastUpdated : null,
+        // ✅ Add filter metadata
+        filters: {
+          search,
+          startDate,
+          endDate,
+          sort,
+          totalItemsBeforeFilter: inventory?.items?.length || 0,
+          totalItemsAfterFilter: items.length
+        }
       }
     });
   } catch (error) {
@@ -1317,6 +1437,8 @@ const getSingleProductInventory = async (req, res) => {
     });
   }
 };
+
+
 
 const getAllInventory = async (req, res) => {
   try {
@@ -1399,37 +1521,15 @@ const getAllInventory = async (req, res) => {
 
 const getQRStatistics = async (req, res) => {
   try {
-    const { productId, articleName, dateFrom, dateTo } = req.query;
+    const { sortBy = 'latest' } = req.query; // Add sort parameter
     
-    // Build match filter
-    let matchFilter = {};
-    if (productId) matchFilter.productId = mongoose.Types.ObjectId(productId);
-    if (articleName) matchFilter.articleName = articleName;
-    
-    // Date range filter
-    let dateFilter = {};
-    if (dateFrom || dateTo) {
-      dateFilter.createdAt = {};
-      if (dateFrom) dateFilter.createdAt.$gte = new Date(dateFrom);
-      if (dateTo) dateFilter.createdAt.$lte = new Date(dateTo);
-    }
-
-    // Get QR code statistics by article
-    const qrStatsByArticle = await QRCodeModel.aggregate([
-      { $match: { ...matchFilter, ...dateFilter } },
-      {
-        $lookup: {
-          from: 'qrbatches',
-          localField: 'batchId',
-          foreignField: '_id',
-          as: 'batch'
-        }
-      },
-      { $unwind: '$batch' },
+    // Get QR code statistics by article - directly from QRCode collection
+    const qrStatsByArticle = await QRCode.aggregate([
+      { $match: {} }, // Remove all filters for default view
       {
         $group: {
           _id: {
-            articleName: '$batch.articleName',
+            articleName: '$articleName',
             productId: '$productId'
           },
           totalQRsGenerated: { $sum: 1 },
@@ -1438,11 +1538,21 @@ const getQRStatistics = async (req, res) => {
             $sum: { $cond: [{ $gt: ['$totalScans', 0] }, 1, 0] }
           },
           activeQRs: {
-            $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] }
+            $sum: { $cond: [{ $eq: ['$status', 'generated'] }, 1, 0] }
+          },
+          manufacturedQRs: {
+            $sum: { $cond: [{ $eq: ['$status', 'manufactured'] }, 1, 0] }
+          },
+          receivedQRs: {
+            $sum: { $cond: [{ $eq: ['$status', 'received'] }, 1, 0] }
+          },
+          shippedQRs: {
+            $sum: { $cond: [{ $eq: ['$status', 'shipped'] }, 1, 0] }
           },
           firstGenerated: { $min: '$createdAt' },
           lastGenerated: { $max: '$createdAt' },
-          avgScansPerQR: { $avg: '$totalScans' }
+          avgScansPerQR: { $avg: '$totalScans' },
+          uniqueBatches: { $addToSet: '$batchId' }
         }
       },
       {
@@ -1453,16 +1563,19 @@ const getQRStatistics = async (req, res) => {
           as: 'product'
         }
       },
-      { $unwind: '$product' },
+      { $unwind: { path: '$product', preserveNullAndEmptyArrays: true } },
       {
         $project: {
           articleName: '$_id.articleName',
           productId: '$_id.productId',
-          productTitle: '$product.title',
+          productTitle: { $ifNull: ['$product.segment', 'Unknown Product'] },
           totalQRsGenerated: 1,
           totalScans: 1,
           scannedQRs: 1,
           activeQRs: 1,
+          manufacturedQRs: 1,
+          receivedQRs: 1,
+          shippedQRs: 1,
           unusedQRs: { $subtract: ['$totalQRsGenerated', '$scannedQRs'] },
           scanRate: {
             $cond: [
@@ -1473,83 +1586,74 @@ const getQRStatistics = async (req, res) => {
           },
           firstGenerated: 1,
           lastGenerated: 1,
-          avgScansPerQR: { $round: ['$avgScansPerQR', 2] }
+          avgScansPerQR: { $round: ['$avgScansPerQR', 2] },
+          totalBatches: { $size: '$uniqueBatches' }
         }
       },
-      { $sort: { totalScans: -1 } }
+      // Dynamic sorting based on frontend selection
+      { $sort: sortBy === 'oldest' ? { lastGenerated: 1 } : { lastGenerated: -1 } }
     ]);
 
-    // Get scan trends over time (last 30 days or custom range)
-    const thirtyDaysAgo = dateFrom ? new Date(dateFrom) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const endDate = dateTo ? new Date(dateTo) : new Date();
-    
-    const scanTrends = await QRCodeModel.aggregate([
-      { $match: matchFilter },
-      { $unwind: '$scans' },
+    // Get recent QR activity grouped by batch and article - Fixed to show segment and date
+    const recentActivity = await QRCode.aggregate([
+      { $match: {} },
       {
-        $match: {
-          'scans.scannedAt': { 
-            $gte: thirtyDaysAgo,
-            $lte: endDate
-          }
+        $group: {
+          _id: {
+            batchId: '$batchId',
+            articleName: '$articleName',
+            productId: '$productId'
+          },
+          qrCount: { $sum: 1 },
+          lastCreated: { $max: '$createdAt' },
+          totalScans: { $sum: '$totalScans' }
         }
       },
       {
         $lookup: {
-          from: 'qrbatches',
-          localField: 'batchId',
+          from: 'products',
+          localField: '_id.productId',
           foreignField: '_id',
-          as: 'batch'
+          as: 'productInfo'
         }
       },
-      { $unwind: '$batch' },
-      {
-        $group: {
-          _id: {
-            date: {
-              $dateToString: {
-                format: '%Y-%m-%d',
-                date: '$scans.scannedAt'
-              }
-            },
-            articleName: '$batch.articleName'
-          },
-          scans: { $sum: 1 },
-          uniqueQRs: { $addToSet: '$_id' }
-        }
-      },
+      { $unwind: { path: '$productInfo', preserveNullAndEmptyArrays: true } },
       {
         $project: {
-          date: '$_id.date',
+          batchId: '$_id.batchId',
           articleName: '$_id.articleName',
-          scans: 1,
-          uniqueQRsScanned: { $size: '$uniqueQRs' }
+          productId: '$_id.productId',
+          productSegment: '$productInfo.segment', // Fixed: Use segment instead of title
+          productTitle: '$productInfo.segment',   // Keep both for compatibility
+          qrCount: 1,
+          lastCreated: 1,
+          totalScans: 1,
+          createdAt: '$lastCreated' // Add this for frontend compatibility
         }
       },
-      { $sort: { date: 1, articleName: 1 } }
+      { $sort: { lastCreated: -1 } },
+      { $limit: 10 }
     ]);
-
-    // Get recent QR batch activity
-    const recentBatches = await QRBatch.find(matchFilter)
-      .sort({ createdAt: -1 })
-      .limit(10)
-      .populate('productId', 'segment title')
-      .populate('generatedBy', 'name email')
-      .lean();
 
     // Calculate overall statistics
     const overallStats = qrStatsByArticle.reduce((acc, stat) => ({
       totalArticles: acc.totalArticles + 1,
-      totalQRsGenerated: acc.totalQRsGenerated + stat.totalQRsGenerated,
-      totalScans: acc.totalScans + stat.totalScans,
-      totalScannedQRs: acc.totalScannedQRs + stat.scannedQRs,
-      totalActiveQRs: acc.totalActiveQRs + stat.activeQRs
+      totalQRsGenerated: acc.totalQRsGenerated + (stat.totalQRsGenerated || 0),
+      totalScans: acc.totalScans + (stat.totalScans || 0),
+      totalScannedQRs: acc.totalScannedQRs + (stat.scannedQRs || 0),
+      totalActiveQRs: acc.totalActiveQRs + (stat.activeQRs || 0),
+      totalManufacturedQRs: acc.totalManufacturedQRs + (stat.manufacturedQRs || 0),
+      totalReceivedQRs: acc.totalReceivedQRs + (stat.receivedQRs || 0),
+      totalShippedQRs: acc.totalShippedQRs + (stat.shippedQRs || 0)
     }), {
       totalArticles: 0,
       totalQRsGenerated: 0,
       totalScans: 0,
       totalScannedQRs: 0,
-      totalActiveQRs: 0
+      totalActiveQRs: 0,
+      totalManufacturedQRs: 0,
+      totalReceivedQRs: 0,
+      totalShippedQRs: 0
     });
 
     // Add calculated fields to overall stats
@@ -1560,19 +1664,20 @@ const getQRStatistics = async (req, res) => {
       ? Math.round((overallStats.totalScannedQRs / overallStats.totalQRsGenerated) * 100 * 100) / 100 
       : 0;
 
+    console.log('QR Statistics Response:', {
+      overview: overallStats,
+      statsByArticle: qrStatsByArticle.length,
+      recentActivity: recentActivity.length
+    });
+
     res.status(200).json({
       result: true,
       message: 'QR statistics retrieved successfully',
       data: {
         overview: overallStats,
         statsByArticle: qrStatsByArticle,
-        scanTrends,
-        recentBatches,
-        filters: {
-          productId,
-          articleName,
-          dateRange: { from: thirtyDaysAgo, to: endDate }
-        }
+        recentBatches: recentActivity,
+        sortBy: sortBy
       }
     });
   } catch (error) {
@@ -1584,6 +1689,8 @@ const getQRStatistics = async (req, res) => {
     });
   }
 };
+
+
 
 
 
