@@ -14,9 +14,19 @@ import {
     scanQRCode, 
     getInventoryData, 
     getSingleProductInventory, 
-    getAllInventory
+    getAllInventory,
+    addContractor, 
+    addWarehouseManager, 
+    addShipmentManager,
+    getContractors,
+    getWarehouseManagers,
+    getShipmentManagers,
+    deleteUser,
+    getUsersByRole,
+    updateUserStats,
+    getInventoryByArticleId
 } from "../Controllers/Admin/admin.controllers.js";
-import adminAuth from "../MIddlewares/adminauth.middleware.js";
+import { adminOnly } from "../MIddlewares/roleauth.middleware.js";
 import { 
     addProduct,
     importProductsFromExcel,
@@ -29,7 +39,8 @@ import {
     markPurchaseConfirm, 
     updateDeal, 
     addCategories, 
-    getCategories 
+    getCategories,
+    getArticlesForDropdown 
 } from "../Controllers/Admin/products.controllers.js";
 import upload from "../MIddlewares/multer.middleware.js";
 import multer from "multer";
@@ -40,13 +51,16 @@ let adminRouter = express.Router();
 
 // Authentication routes
 adminRouter.post("/register", register)
-.get("/me", adminAuth, getAdmin)
+.get("/me", adminOnly, getAdmin)
+.post("/qr/generate", adminOnly, generateQRCodes)
 
 // Product management routes
 .post("/products/addproduct", upload.array('images', 10), addProduct)
 .delete("/products/deleteproduct/:productid", deleteProduct)
 .get("/products/getproducts", getAllProdcuts)
 .post("/products/import-excel", upload.single('excel'), importProductsFromExcel)
+.get("/products/articles", getArticlesForDropdown)
+
 
 // Deal management routes
 .post("/deal/add", upload.array('images', 1), addBestDeals)
@@ -73,8 +87,8 @@ adminRouter.post("/register", register)
 .post("/festival/upload", upload.single('images'), addFestivleImage)
 
 // QR Code management routes
-.post("/qr/generate", adminAuth, generateQRCodes)
-.post("/qr/download", adminAuth, downloadQRCodes)
+.post("/qr/generate", adminOnly, generateQRCodes)
+.post("/qr/download", adminOnly, downloadQRCodes)
 .post("/qr/scan/:uniqueId", scanQRCode)
 .get("/qr/statistics", getQRStatistics)
 
@@ -84,5 +98,19 @@ adminRouter.post("/register", register)
 // Fixed: Use separate routes instead of optional parameter syntax
 .get("/inventory/data/:productId", getInventoryData) // Route with productId parameter
 .get("/inventory/data", getInventoryData) // Route without productId (uses query parameter)
+.get("/inventory/article/:articleId", getInventoryByArticleId)
+
+// User Management Routes
+.post("/users/contractor/add", adminOnly, addContractor)
+.post("/users/warehouse/add", adminOnly, addWarehouseManager)
+.post("/users/shipment/add", adminOnly, addShipmentManager)
+
+.get("/users/contractors", adminOnly, getContractors)
+.get("/users/warehouse-managers", adminOnly, getWarehouseManagers)
+.get("/users/shipment-managers", adminOnly, getShipmentManagers)
+.get("/users/role/:role", adminOnly, getUsersByRole)
+
+.put("/users/:id", adminOnly, updateUserStats)
+.delete("/users/:id", adminOnly, deleteUser)
 
 export default adminRouter;

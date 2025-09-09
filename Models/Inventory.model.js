@@ -1,153 +1,121 @@
+// models/Inventory.js
 import mongoose from 'mongoose';
 
 const { Schema, model } = mongoose;
 
 const inventoryItemSchema = new Schema({
-  qrCodeId: {
-    type: Schema.Types.ObjectId,
-    ref: 'QRCode',
-    required: true
-  },
-  uniqueId: {
-    type: String,
-    required: true
-  },
-  articleName: {
-    type: String,
-    required: true
-  },
+  qrCodeId: { type: Schema.Types.ObjectId, ref: 'QRCode', required: true, unique: true },
+  uniqueId: { type: String, required: true, unique: true },
+  articleName: { type: String, required: true },
   articleDetails: {
-    type: Schema.Types.Mixed,
-    required: true
+    color: { type: String, required: true },
+    size: { type: String, required: true },
+    numberOfCartons: { type: Number, required: true },
+    articleId: {type: Schema.Types.ObjectId}
   },
-  
-  // Manufacturing stage
-  manufacturedAt: Date,
-  manufacturedBy: {
-    userId: String,
-    userType: String,
-    name: String
-  },
-  manufacturingLocation: {
-    address: String,
-    coordinates: {
-      latitude: Number,
-      longitude: Number
-    }
-  },
-  
-  // Warehouse receipt stage
-  receivedAt: Date,
-  receivedBy: {
-    userId: String,
-    userType: String,
-    name: String
-  },
-  receivedLocation: {
-    address: String,
-    coordinates: {
-      latitude: Number,
-      longitude: Number
-    }
-  },
-  
-  // Distributor shipment stage
-  shippedAt: Date,
-  shippedBy: {
-    userId: String,
-    userType: String,
-    name: String
-  },
-  distributorDetails: {
-    distributorId: { type: Schema.Types.ObjectId, ref: 'Distributor' },
-    distributorName: String,
-    trackingNumber: String
-  },
-  
   status: {
     type: String,
-    enum: ['manufactured', 'in_warehouse', 'shipped_to_distributor', 'delivered', 'damaged', 'returned'],
-    default: 'manufactured'
+    enum: ['received', 'shipped'],
+    default: 'received'
   },
-  
-  // Journey tracking
-  lifecycle: [{
-    stage: {
-      type: String,
-      enum: ['manufactured', 'received_warehouse', 'shipped_distributor']
-    },
-    timestamp: Date,
-    location: String,
-    performedBy: String,
-    notes: String
-  }],
-  
+  receivedAt: Date,
+  shippedAt: Date,
+  receivedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  shippedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  distributorId: { type: Schema.Types.ObjectId, ref: 'User' },
   notes: String
 }, { timestamps: true });
 
 const inventorySchema = new Schema({
-  productId: {
-    type: Schema.Types.ObjectId,
-    ref: 'Product',
-    required: true,
-    unique: true
-  },
-  totalQuantity: {
-    type: Number,
-    default: 0,
-    min: 0
-  },
+  productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true, unique: true },
   
-  // Breakdown by lifecycle stage - UPDATED TO CUMULATIVE COUNTS
+  // ✅ ONLY track received and shipped quantities
   quantityByStage: {
-    manufactured: { type: Number, default: 0 },
-    in_warehouse: { type: Number, default: 0 },
-    shipped_to_distributor: { type: Number, default: 0 }
+    received: { type: Number, default: 0 },
+    shipped: { type: Number, default: 0 }
   },
   
-  availableQuantity: {
-    type: Number,
-    default: 0,
-    min: 0
-  },
+  availableQuantity: { type: Number, default: 0, min: 0 }, // Items available to ship
   items: [inventoryItemSchema],
-  lastUpdated: {
-    type: Date,
-    default: Date.now
-  }
+  lastUpdated: { type: Date, default: Date.now }
 }, { timestamps: true });
 
-// ✅ UPDATED: Cumulative counting logic
+// ✅ Updated pre-save hook to only calculate received and shipped
 inventorySchema.pre('save', function(next) {
-  this.totalQuantity = this.items.length;
-  
-  // Calculate CUMULATIVE quantities by stage (items that have reached each stage)
-  this.quantityByStage.manufactured = this.items.filter(item => 
-    ['manufactured', 'in_warehouse', 'shipped_to_distributor', 'delivered'].includes(item.status)
-  ).length; // ✅ Count all items that have been manufactured (regardless of current status)
-  
-  this.quantityByStage.in_warehouse = this.items.filter(item => 
-    ['in_warehouse', 'shipped_to_distributor', 'delivered'].includes(item.status)
-  ).length; // ✅ Count all items that have reached warehouse (including shipped/delivered ones)
-  
-  this.quantityByStage.shipped_to_distributor = this.items.filter(item => 
-    ['shipped_to_distributor', 'delivered'].includes(item.status)
-  ).length; // ✅ Count all items that have been shipped to distributor
-  
-  // Available quantity is only items currently in warehouse
-  this.availableQuantity = this.items.filter(item => 
-    item.status === 'in_warehouse'
-  ).length;
-  
+  this.quantityByStage.received = this.items.filter(i => i.status === 'received').length;
+  this.quantityByStage.shipped = this.items.filter(i => i.status === 'shipped').length;
+  this.availableQuantity = this.quantityByStage.received; // Only received items are available
   this.lastUpdated = new Date();
   next();
 });
 
-// Index for better performance
+// ✅ Updated syncWithQRCode method
+// ✅ Enhanced syncWithQRCode method in Inventory schema
+// Enhanced syncWithQRCode method in Inventory schema
+inventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
+  const QRCode = mongoose.model('QRCode');
+  const qrCode = await QRCode.findById(qrCodeId);
+  if (!qrCode) throw new Error('QRCode not found');
+
+  // Only map to 'received' or 'shipped'
+  let status = 'received';
+  if (qrCode.status === 'shipped') {
+    status = 'shipped';
+  }
+
+  // Resolve articleName and articleId
+  let articleName = qrCode.articleName
+    || qrCode.contractorInput?.articleName
+    || qrCode.productReference?.articleName
+    || 'Unknown Article';
+
+  // ✅ Extract articleId from QR code
+  let articleId = qrCode.contractorInput?.articleId 
+    || qrCode.productReference?.articleId;
+
+  const idx = this.items.findIndex(i => i.qrCodeId.toString() === qrCodeId.toString());
+
+  const baseItem = {
+    qrCodeId: qrCode._id,
+    uniqueId: qrCode.uniqueId,
+    articleName,
+    articleDetails: {
+      color: qrCode.contractorInput?.color || 'Unknown',
+      size: qrCode.contractorInput?.size || 'Unknown',
+      numberOfCartons: qrCode.contractorInput?.totalCartons || 1,
+      articleId: articleId // ✅ Store article ID in inventory
+    },
+    status,
+    receivedAt: qrCode.warehouseDetails?.receivedAt,
+    shippedAt: qrCode.shipmentDetails?.shippedAt || (status === 'shipped' ? new Date() : null),
+    receivedBy: qrCode.warehouseDetails?.receivedBy?.userId,
+    shippedBy: qrCode.shipmentDetails?.shippedBy?.userId,
+    distributorId: qrCode.shipmentDetails?.distributorId,
+    notes: qrCode.notes || ''
+  };
+
+  if (idx === -1) {
+    this.items.push(baseItem);
+  } else {
+    Object.assign(this.items[idx], baseItem);
+  }
+
+  // Recalculate counts after sync
+  this.quantityByStage.received = this.items.filter(i => i.status === 'received').length;
+  this.quantityByStage.shipped = this.items.filter(i => i.status === 'shipped').length;
+  this.availableQuantity = this.quantityByStage.received;
+  this.lastUpdated = new Date();
+
+  return this.save();
+};
+
+
+
 inventorySchema.index({ productId: 1 });
 inventorySchema.index({ 'items.qrCodeId': 1 });
 inventorySchema.index({ 'items.uniqueId': 1 });
 inventorySchema.index({ 'items.status': 1 });
+inventorySchema.index({ 'items.distributorId': 1 });
 
 const Inventory = model('Inventory', inventorySchema);
 

@@ -1,21 +1,28 @@
 import express from "express";
-import "dotenv/config"
-import cors from "cors"
+import "dotenv/config";
+import cors from "cors";
 import cookieParser from "cookie-parser";
 import dbConnect from "./DB/DbConnect.js";
+
+// ✅ Import all route modules
 import adminRouter from "./Routes/admin.router.js";
 import userRouter from "./Routes/user.router.js";
 import AuthRouter from "./Routes/auth.router.js";
+import contractorRouter from "./Routes/contractor.router.js";  // ✅ New
+import warehouseRouter from "./Routes/warehouse.router.js";    // ✅ New
+import shipmentRouter from "./Routes/shipment.router.js";      // ✅ New
+
 import cron from "node-cron";
 import dealsModel from "./Models/Deals.model.js";
 import productModel from "./Models/Product.model.js";
 import mongoose from "mongoose";
 
-const server = express()
+const server = express();
 
+// Middleware setup
 server.use(express.json());
-server.use(express.urlencoded({extended: true}))
-server.use(cookieParser())
+server.use(express.urlencoded({ extended: true }));
+server.use(cookieParser());
 
 const allowedOrigins = [
   "http://www.pinkeyfootwear.in",
@@ -34,20 +41,45 @@ server.use(cors({
       callback(new Error(`Origin ${origin} not allowed by CORS`));
     }
   },
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  optionsSuccessStatus: 200 // For legacy browser support
 }));
 
-server.use("/api/v1/auth", AuthRouter)
-server.use("/api/v1/admin", adminRouter)
-server.use("/api/v1/distributor", userRouter)
+// ✅ Updated route mounting - Role-based API structure
+server.use("/api/v1/auth", AuthRouter);                    // ✅ Universal auth routes
+server.use("/api/v1/admin", adminRouter);                  // ✅ Admin-only routes
+server.use("/api/v1/distributor", userRouter);             // ✅ Distributor-only routes
+server.use("/api/v1/contractor", contractorRouter);        // ✅ New - Contractor routes
+server.use("/api/v1/warehouse", warehouseRouter);          // ✅ New - Warehouse inspector routes
+server.use("/api/v1/shipment", shipmentRouter);            // ✅ New - Shipment manager routes
 
+// ✅ Health check endpoint
+server.get("/api/v1/health", (req, res) => {
+  res.status(200).json({
+    result: true,
+    message: "Server is running",
+    timestamp: new Date().toISOString(),
+    routes: {
+      auth: "/api/v1/auth",
+      admin: "/api/v1/admin", 
+      distributor: "/api/v1/distributor",
+      contractor: "/api/v1/contractor",
+      warehouse: "/api/v1/warehouse",
+      shipment: "/api/v1/shipment"
+    }
+  });
+});
 
+// Cron job for expired deals processing
 const processExpiredDeals = async () => {
   try {
     // Find all deals where expireAt has passed
     const expiredDeals = await dealsModel.find({ 
       expireAt: { $lt: new Date() } 
     });
+    
     for (const deal of expiredDeals) {
       const articleId = deal.articleId;
       
@@ -78,32 +110,50 @@ const processExpiredDeals = async () => {
     }
     
     if (expiredDeals.length > 0) {
-      console.log(`Processed ${expiredDeals.length} expired deals`);
+      console.log(`✅ Processed ${expiredDeals.length} expired deals at ${new Date().toISOString()}`);
     }
     
   } catch (error) {
-    console.error("Error processing expired deals:", error);
+    console.error("❌ Error processing expired deals:", error);
   }
 };
 
-// // Run every minute
+// Run every minute to check for expired deals
 cron.schedule("* * * * *", async () => {
   await processExpiredDeals();
 });
 
-
-
-dbConnect()
-  .then(() => {
-    server.listen(process.env.PORT)
-    console.log("Connected");
-  })
-  .catch((err) => {
-    console.error(err)
-    console.error("Database connection failed:", err);
+// ✅ Enhanced error handling for uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  process.exit(1);
 });
 
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
+});
 
+// Database connection and server startup
+dbConnect()
+  .then(() => {
+    const PORT = process.env.PORT || 5000;
+    server.listen(PORT, () => {
+      console.log(`✅ Server running on port ${PORT}`);
+      console.log(`🌐 API Base URL: http://localhost:${PORT}`);
+      console.log(`📋 Available routes:`);
+      console.log(`   • Auth: http://localhost:${PORT}/api/v1/auth`);
+      console.log(`   • Admin: http://localhost:${PORT}/api/v1/admin`);
+      console.log(`   • Distributor: http://localhost:${PORT}/api/v1/distributor`);
+      console.log(`   • Contractor: http://localhost:${PORT}/api/v1/contractor`);
+      console.log(`   • Warehouse: http://localhost:${PORT}/api/v1/warehouse`);
+      console.log(`   • Shipment: http://localhost:${PORT}/api/v1/shipment`);
+      console.log(`   • Health Check: http://localhost:${PORT}/api/v1/health`);
+    });
+  })
+  .catch((err) => {
+    console.error("❌ Database connection failed:", err);
+    process.exit(1);
+  });
 
-
-
+export default server;

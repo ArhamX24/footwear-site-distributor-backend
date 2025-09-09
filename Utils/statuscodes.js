@@ -5,6 +5,7 @@ let statusCodes = {
     unauthorized: 403,
     notFound: 404,
     serverError: 500,
+    forbidden: 402
 }
 
 export default statusCodes

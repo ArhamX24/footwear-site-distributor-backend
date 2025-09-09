@@ -1,6 +1,6 @@
-import userModel from "../Models/distributor.model.js";
+import userModel from "../Models/user.model.js";
 import jwt from 'jsonwebtoken'
-import statusCodes from "../Utils/statuscodes.js";
+import statusCodes from "../Utils/statusCodes.js";
 import mongoose from "mongoose";
 
 const userAuth = async (req,res,next) => {

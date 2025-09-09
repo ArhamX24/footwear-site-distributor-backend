@@ -2,8 +2,7 @@ import AdminModel from "../../Models/Admin.model.js";
 import zod from "zod"
 import bcrypt from "bcrypt"
 import jwt from "jsonwebtoken"
-import statuscodes from "../../Utils/statuscodes.js";
-import userModel from "../../Models/distributor.model.js";
+import userModel from "../../Models/user.model.js";
 import purchaseProductModel from "../../Models/Purchasedproduct.model.js";
 import finalOrderPerforma from "../../Utils/finalOrderPerforma.js";
 import Festive from "../../Models/Festivle.model.js";
@@ -15,9 +14,15 @@ import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import path from 'path';
 import archiver from 'archiver';
-import { Product, QRCode, QRCode as QRCodeModel} from '../../Models/Product.model.js';
+import Product from '../../Models/Product.model.js';
+import QRCode from "../../Models/QrCode.model.js";
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
+import {ArticleMatcher, createNewArticle, updateArticleStats} from "../../Utils/articleHelper.js";
+import Shipment from "../../Models/shipment.model.js";
+import { addToInventory, removeFromInventoryAndCreateShipment } from "../../Utils/inventoryHelpers.js";
+import { createCanvas, loadImage } from 'canvas';
+import PDFDocument from 'pdfkit';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -31,6 +36,17 @@ const validationSchema = zod.object({
     password: zod
       .string()
 });
+
+let statusCodes = {
+    success: 200,
+    noContent:204,
+    badRequest: 400,
+    unauthorized: 403,
+    notFound: 404,
+    conflict: 409,
+    serverError: 500,
+}
+
 
 const loginValidationSchema = zod.object({
     phoneNo: zod
@@ -66,30 +82,121 @@ let cookieOption = {
 
 const register = async (req,res) => {
     try {
-        let userdata = req?.body
+    const { fullName, phoneNo, password, permissions } = req.body;
 
-        let checkData = validationSchema.safeParse({phoneNo: userdata.phoneNo, password: userdata.password});
-
-        // if(!checkData.success){
-        //     return res.status(statuscodes.badRequest).send({result: false, message: checkData.error.errors[0].message, error: checkData.error})
-        // }
-
-        let alreadyInDb = await AdminModel.findOne({phoneNo: userdata.phoneNo})
-
-        if(alreadyInDb){
-            return res.status(statuscodes.notFound).send({result: false, message: "Account With This Phone Number Already Exists"})
-        }
-
-        await AdminModel.create({
-            phoneNo: userdata.phoneNo,
-            password: userdata.password,
-            role: "admin"
-        })
-
-        return res.status(statuscodes.success).send({result: true, message: "Admin Created"})
-    } catch (error) {
-        return res.status(statuscodes.serverError).send({result: false, message: "Error Creating Admin. Please Try Again Later", error: error})
+    // Validation
+    if (!fullName || !phoneNo || !password) {
+      return res.status(statusCodes.badRequest).json({
+        result: false,
+        message: "Full name, phone number, and password are required"
+      });
     }
+
+    // Password strength validation
+    if (password.length < 6) {
+      return res.status(statusCodes.badRequest).json({
+        result: false,
+        message: "Password must be at least 6 characters long"
+      });
+    }
+
+    // Check if phone number already exists
+    const existingUser = await userModel.findOne({ phoneNo });
+    if (existingUser) {
+      return res.status(statusCodes.badRequest).json({
+        result: false,
+        message: "Phone number already registered"
+      });
+    }
+
+
+    // Create new admin
+    const newAdmin = new userModel({
+      name: fullName,
+      phoneNo,
+      password,
+      role: 'admin',
+      isActive: true,
+      adminDetails: {
+        fullName,
+        phoneNo: Number(phoneNo),
+        password,
+        permissions: permissions || ['all'],
+        lastAdminAction: new Date()
+      },
+      createdBy: req.user?._id || null, // null for first admin
+      lastLogin: null
+    });
+
+    await newAdmin.save();
+
+    // Generate JWT tokens for immediate login
+    const accessToken = jwt.sign(
+      { 
+        _id: newAdmin._id, 
+        phoneNo: newAdmin.phoneNo, 
+        role: newAdmin.role,
+        name: newAdmin.name 
+      },
+      process.env.ACCESS_JWT_SECRET,
+      { expiresIn: process.env.ACCESS_JWT_EXPIRY }
+    );
+
+    const refreshToken = jwt.sign(
+      { 
+        _id: newAdmin._id, 
+        role: newAdmin.role 
+      },
+      process.env.REFRESH_JWT_SECRET,
+      { expiresIn: process.env.REFRESH_JWT_EXPIRY }
+    );
+
+    // Update admin with refresh token
+    await userModel.updateOne(
+      { _id: newAdmin._id },
+      { $set: { refreshToken } }
+    );
+
+    // Return response without sensitive data
+    const adminResponse = {
+      _id: newAdmin._id,
+      name: newAdmin.name,
+      phoneNo: newAdmin.phoneNo,
+      role: newAdmin.role,
+      fullName: newAdmin.adminDetails.fullName,
+      permissions: newAdmin.adminDetails.permissions,
+      isActive: newAdmin.isActive,
+      createdAt: newAdmin.createdAt
+    };
+
+    // Set cookies
+    const cookieOptions = {
+      path: "/",
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
+    };
+
+    res.cookie("accessToken", accessToken, cookieOptions);
+    res.cookie("refreshToken", refreshToken, cookieOptions);
+
+    res.status(statusCodes.success).json({
+      result: true,
+      message: "Admin registered and logged in successfully",
+      data: {
+        admin: adminResponse,
+        redirectTo: '/admin/dashboard'
+      }
+    });
+
+  } catch (error) {
+    console.error('Error registering admin:', error);
+    res.status(statusCodes.serverError).json({
+      result: false,
+      message: "Failed to register admin",
+      error: error.message
+    });
+  }
 }
 
 const login = async (req,res) => {
@@ -99,19 +206,19 @@ const login = async (req,res) => {
         let checkData = loginValidationSchema.safeParse({phoneNo: userdata.phoneNo, password: userdata.password});
 
         if(!checkData.success){
-            return res.status(statuscodes.badRequest).send({result: false, message: checkData.error.errors[0].message})
+            return res.status(statusCodes.badRequest).send({result: false, message: checkData.error.errors[0].message})
         }
 
         let alreadyInDb = await AdminModel.findOne({phoneNo: userdata.phoneNo}).select("-refreshToken")
 
         if(!alreadyInDb){
-            return res.status(statuscodes.notFound).send({result: false, message: "Account Not Found"})
+            return res.status(statusCodes.notFound).send({result: false, message: "Account Not Found"})
         }
 
         let comparePassword = await bcrypt.compare(userdata.password, alreadyInDb.password)
 
         if(!comparePassword){
-            return res.status(statuscodes.unauthorized).send({result:false, message: "Incorrect Password"})
+            return res.status(statusCodes.unauthorized).send({result:false, message: "Incorrect Password"})
         }
 
         const accessToken = jwt.sign({
@@ -133,10 +240,10 @@ const login = async (req,res) => {
             { $set: { refreshToken: refreshToken } }
         );
 
-        return res.status(statuscodes.success).cookie("accessToken", accessToken, cookieOption).cookie("refreshToken", refreshToken, cookieOption).send({result: true, message: "Login Success", role: "admin"})
+        return res.status(statusCodes.success).cookie("accessToken", accessToken, cookieOption).cookie("refreshToken", refreshToken, cookieOption).send({result: true, message: "Login Success", role: "admin"})
 
     } catch (error) {
-        return res.status(statuscodes.serverError).send({result: false, message: "Error Logging In. Please Try Again Later"})
+        return res.status(statusCodes.serverError).send({result: false, message: "Error Logging In. Please Try Again Later"})
     }
 }
 
@@ -146,46 +253,9 @@ const getAdmin = async (req,res) => {
     try {
         let admin = req.admin
 
-        return res.status(statuscodes.success).send({result: true, message: "Admin Data Found", admin})
+        return res.status(statusCodes.success).send({result: true, message: "Admin Data Found", admin})
     } catch (error) {
-        return res.status(statuscodes.serverError).send({result: false, message: "Error in Getting Admin. Please Try Again Later"})
-    }
-}
-
-const addDistributor = async (req,res) => {
-    try {
-        let {billNo, partyName,transport, phoneNo, password } = req?.body;
-
-        let numBillNo = Number(billNo);
-        partyName = partyName ? partyName.trim() : "";
-        transport = transport ? transport.trim() : "";
-        password = password ? password.trim() : "";
-
-        let checkData = distributorValidationSchema.safeParse({billNo: numBillNo, partyName, transport, phoneNo, password});
-
-        if(!checkData.success){
-            return res.status(statuscodes.badRequest).send({result: false, message: checkData.error.errors[0].message, error: checkData.error})
-        }
-
-        let alreadyInDb = await userModel.findOne({phoneNo})
-
-        if(alreadyInDb){
-            return res.status(statuscodes.badRequest).send({result: false, message: "Distributor Already Exists"})
-        }
-
-        await userModel.create({
-            billNo: numBillNo,
-            partyName,
-            transport,
-            phoneNo,
-            password,
-            role: "distributor"
-        })
-
-        return res.status(statuscodes.success).send({result: true, message: "Distributor Created"})
-
-    } catch (error) {
-        return res.status(statuscodes.serverError).send({result: false, message: "Error in Adding Distributor. Please Try Again Later"})
+        return res.status(statusCodes.serverError).send({result: false, message: "Error in Getting Admin. Please Try Again Later"})
     }
 }
 
@@ -197,7 +267,7 @@ const addFestivleImage = async (req, res) => {
         endDate = new Date(endDate);
 
         if (!req.file || !req.file.path) {
-            return res.status(statuscodes.badRequest).send({ 
+            return res.status(statusCodes.badRequest).send({ 
                 result: false, message: "Please Upload an Image" 
             });
         }
@@ -207,7 +277,7 @@ const addFestivleImage = async (req, res) => {
         try {
             uploadResult = await uploadOnCloudinary(req.file.path);
         } catch (uploadError) {
-            return res.status(statuscodes.badRequest).send({ 
+            return res.status(statusCodes.badRequest).send({ 
                 result: false, message: "Image Failed to Upload. Please Try Again Later" 
             });
         }
@@ -218,13 +288,13 @@ const addFestivleImage = async (req, res) => {
             image: uploadResult.secure_url // ✅ Save Cloudinary URL in the database
         });
 
-        return res.status(statuscodes.success).send({ 
+        return res.status(statusCodes.success).send({ 
             result: true, message: "Festival Image Uploaded Successfully",
             imageUrl: uploadResult.secure_url
         });
 
     } catch (error) {
-        return res.status(statuscodes.serverError).send({ 
+        return res.status(statusCodes.serverError).send({ 
             result: false, message: "Error in Adding Festival Image. Please Try Again Later" 
         });
     }
@@ -235,7 +305,7 @@ const getFestivleImages = async (req, res) => {
         let festiveImages = await Festive.find({}, "image"); // ✅ Select only image field
 
         if (!festiveImages || festiveImages.length === 0) {
-            return res.status(statuscodes.success).send({
+            return res.status(statusCodes.success).send({
                 result: false, message: "No Festival Images Added"
             });
         }
@@ -243,11 +313,11 @@ const getFestivleImages = async (req, res) => {
         // ✅ Extract image URLs only
         let imageUrls = festiveImages.map((festival) => festival.image);
 
-        return res.status(statuscodes.success).send({
+        return res.status(statusCodes.success).send({
             result: true, message: "Festival Images Retrieved", imageUrls
         });
     } catch (error) {
-        return res.status(statuscodes.serverError).send({
+        return res.status(statusCodes.serverError).send({
             result: false, message: "Error in Getting Festival Images. Please Try Again Later"
         });
     }
@@ -260,31 +330,54 @@ const deleteDistributor = async (req,res) => {
         let distributorInTable = await userModel.findById(distributorid)
 
         if(!distributorInTable){
-            return res.status(statuscodes.badRequest).send({result: false, message: "Distributor Not Found"})
+            return res.status(statusCodes.badRequest).send({result: false, message: "Distributor Not Found"})
         }
 
         await userModel.findByIdAndDelete(distributorid)
 
-        return res.status(statuscodes.success).send({result: true, message: "Distributor Removed"})
+        return res.status(statusCodes.success).send({result: true, message: "Distributor Removed"})
     } catch (error) {
-        return res.status(statuscodes.serverError).send({result: false, message: "Error in Adding Distributor. Please Try Again Later"})
+        return res.status(statusCodes.serverError).send({result: false, message: "Error in Adding Distributor. Please Try Again Later"})
     }
 }
 
-const getDistributors = async (req,res) => {
+const getDistributors = async (req, res) => {
     try {
-        let distributors = await userModel.find({})
+        const distributors = await userModel.find({ 
+            role: 'distributor',
+            isActive: true 
+        }).select('-password -refreshToken').sort({ createdAt: -1 });
 
-        if(!distributors){
-            return res.status(statuscodes.noContent).send({result: false, message: "No Distributors Added"})
-        }
+        const formattedDistributors = distributors.map(distributor => ({
+            _id: distributor._id,
+            name: distributor.name,
+            phoneNo: distributor.phoneNo,
+            role: distributor.role,
+            billNo: distributor.distributorDetails?.billNo,
+            partyName: distributor.distributorDetails?.partyName,
+            transport: distributor.distributorDetails?.transport,
+            address: distributor.distributorDetails?.address,
+            totalPurchases: distributor.distributorDetails?.purchases?.length || 0,
+            totalShipments: distributor.distributorDetails?.receivedShipments?.length || 0,
+            isActive: distributor.isActive,
+            createdAt: distributor.createdAt,
+            lastLogin: distributor.lastLogin
+        }));
 
-        return res.status(statuscodes.success).send({result: true, message: "Distributors Found", data: distributors})
+        res.status(statusCodes.success).json({
+            result: true,
+            message: "Distributors retrieved successfully",
+            data: formattedDistributors
+        });
 
     } catch (error) {
-        return res.status(statuscodes.serverError).send({result: false, message: "Error in Getting Distributor. Please Try Again Later"})
+        console.error('Error getting distributors:', error);
+        res.status(statusCodes.serverError).json({
+            result: false,
+            message: "Failed to retrieve distributors"
+        });
     }
-}
+};
 
 const updateDistributor = async (req,res) => {
     try {
@@ -294,20 +387,20 @@ const updateDistributor = async (req,res) => {
         let distributorInDb = await userModel.findById(distributorid)
 
         if(!distributorInDb){
-            return res.status(statuscodes.badRequest).send({result: false, message: "Distributor Not Found"})
+            return res.status(statusCodes.badRequest).send({result: false, message: "Distributor Not Found"})
         }
 
         let validateData = distributorValidationSchema.safeParse(newData)
 
         if(!validateData.success){
-            return res.status(statuscodes.badRequest).send({result: false, message: validateData.error.errors[0].message, error: validateData.error})
+            return res.status(statusCodes.badRequest).send({result: false, message: validateData.error.errors[0].message, error: validateData.error})
         }
 
         await userModel.findByIdAndUpdate(distributorid, newData, {new: true})
 
-        return res.status(statuscodes.success).send({result: true, message: "Distributor Updated"})
+        return res.status(statusCodes.success).send({result: true, message: "Distributor Updated"})
     } catch (error) {
-        return res.status(statuscodes.serverError).send({result: false, message: "Error in Updating Distributor. Please Try Again Later"})
+        return res.status(statusCodes.serverError).send({result: false, message: "Error in Updating Distributor. Please Try Again Later"})
     }
 }
 
@@ -331,206 +424,181 @@ try {
 
 const generateQRCodes = async (req, res) => {
   try {
-    const { productId, articleName, segment, numberOfQRs, purpose = 'inventory' } = req.body;
-    const userId = req.user?.id;
+    const { articleId, articleName, colors, sizes, numberOfQRs } = req.body; // ✅ Add articleId
+    const userId = req.user?._id;
 
-    // Validate input
-    if (!productId || !articleName || !numberOfQRs) {
+    // Validate inputs
+    if (!articleId || !articleName || !colors || !sizes || !numberOfQRs) {
       return res.status(400).json({
         result: false,
-        message: "Product ID, article name and number of QR codes are required"
+        message: 'All fields are required: articleId, articleName, colors, sizes, numberOfQRs'
       });
     }
 
     if (numberOfQRs < 1 || numberOfQRs > 1000) {
       return res.status(400).json({
         result: false,
-        message: "Number of QR codes must be between 1 and 1000"
+        message: 'Number of QR codes must be between 1 and 1000'
       });
     }
 
-    // Find product by productId or by article ID within variants
-    const product = await Product.findOne({
-      $or: [
-        { _id: productId },
-        { 'variants.articles._id': productId }
-      ]
-    });
+    // ✅ Fetch article details from Product using articleId
+    const articleData = await Product.aggregate([
+      { $unwind: "$variants" },
+      { $unwind: "$variants.articles" },
+      { $match: { "variants.articles._id": mongoose.Types.ObjectId(articleId) } },
+      {
+        $project: {
+          articleId: "$variants.articles._id",
+          articleName: "$variants.articles.name",
+          articleColors: "$variants.articles.colors",
+          articleSizes: "$variants.articles.sizes",
+          variantId: "$variants._id",
+          variantName: "$variants.name",
+          productId: "$_id",
+          segment: "$segment"
+        }
+      },
+      { $limit: 1 }
+    ]);
 
-    if (!product) {
+    if (!articleData || articleData.length === 0) {
       return res.status(404).json({
         result: false,
-        message: "Product not found"
+        message: 'Article not found'
       });
     }
 
-    // Find the specific article within variants
-    let foundArticle = null;
-    let variantName = null;
+    const article = articleData[0];
+    
+    // Convert arrays if strings
+    const colorsArray = Array.isArray(colors) ? colors : [colors];
+    const sizesArray = Array.isArray(sizes) ? sizes : [sizes];
+    const sizesDisplay = sizesArray.join('X');
 
-    if (product.variants && product.variants.length > 0) {
-      for (const variant of product.variants) {
-        const article = variant.articles.find(a => 
-          a._id.toString() === productId.toString() || 
-          a.name === articleName
-        );
-        if (article) {
-          foundArticle = article;
-          variantName = variant.name;
-          break;
-        }
-      }
-
-      // If no article found by ID, search by article name across all variants
-      if (!foundArticle) {
-        for (const variant of product.variants) {
-          const article = variant.articles.find(a => a.name === articleName);
-          if (article) {
-            foundArticle = article;
-            variantName = variant.name;
-            break;
-          }
-        }
-      }
-    }
-
-    if (!foundArticle) {
-      return res.status(404).json({
-        result: false,
-        message: "Article not found in product variants"
-      });
-    }
-
+    // Generate batch ID
+    const batchId = `BATCH_${Date.now()}_${userId}`;
     const qrCodes = [];
-    const batchId = uuidv4();
 
-    // Create temporary directory for QR code images
-    const tempDir = path.join(process.cwd(), 'temp', 'qr-codes', batchId);
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
-    }
-
-    // Generate QR codes loop
-    for (let i = 0; i < numberOfQRs; i++) {
+    // Generate individual QR codes for each carton
+    for (let i = 1; i <= numberOfQRs; i++) {
       const uniqueId = uuidv4();
 
-      const qrDataObj = {
-        productId: product._id.toString(),
-        articleId: foundArticle._id.toString(),
-        productName: foundArticle.name, // Use article name, not articleName
-        segment: segment || product.segment,
-        variant: variantName,
+      // ✅ Enhanced QR payload with article context
+      const qrPayload = {
         uniqueId,
+        
+        // ✅ Add article reference with IDs
+        productReference: {
+          productId: article.productId.toString(),
+          variantId: article.variantId.toString(),
+          articleId: article.articleId.toString(),
+          variantName: article.variantName,
+          articleName: article.articleName,
+          segment: article.segment
+        },
+        
+        articleName: article.articleName,
+        
+        contractorInput: {
+          articleName,
+          articleId: article.articleId.toString(), // ✅ Include in contractor input
+          colors: colorsArray,
+          sizes: sizesArray,
+          cartonNumber: i,
+          totalCartons: numberOfQRs
+        },
+        
         batchId,
         generatedAt: new Date().toISOString(),
-        serialNumber: i + 1,
-        totalCount: numberOfQRs,
-        index: i + 1,
-        purpose,
-        lifecycle: {
-          stage: 'generated',
-          nextStage: 'manufacturing'
-        },
-        verifyUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify/${uniqueId}`,
-        scanUrls: {
-          manufacturing: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/scan/manufacturing/${uniqueId}`,
-          warehouse: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/scan/warehouse/${uniqueId}`,
-          distributor: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/scan/distributor/${uniqueId}`
+        status: 'generated',
+        
+        // Enhanced label data for display
+        labelData: {
+          articleName,
+          colors: colorsArray.join(', '),
+          sizes: sizesDisplay,
+          cartonNo: i
         }
       };
 
-      const qrString = JSON.stringify(qrDataObj);
+      const qrString = JSON.stringify(qrPayload);
 
-      // Generate base64 QR code image
-      const qrCodeDataURL = await QRCodeLib.toDataURL(qrString, {
-        width: 300,
-        margin: 2,
-        color: {
-          dark: '#000000',
-          light: '#FFFFFF'
-        },
-        errorCorrectionLevel: 'M'
+      // Generate QR code with label information
+      const qrCodeDataURL = await generateQRWithLabel(qrString, {
+        articleName,
+        colors: colorsArray.join(', '),
+        sizes: sizesDisplay,
+        cartonNo: i
       });
 
-      // Save QR code image file
-      const fileName = `QR_${foundArticle.name.replace(/[^a-zA-Z0-9]/g, '_')}_${String(i + 1).padStart(4, '0')}_${uniqueId.slice(0, 8)}.png`;
-      const filePath = path.join(tempDir, fileName);
-      const base64Data = qrCodeDataURL.replace(/^data:image\/png;base64,/, '');
-
-      fs.writeFileSync(filePath, base64Data, 'base64');
-
-      // Save QR code document in DB
-      let qrDoc = new QRCode({
+      // ✅ Save to database with article context
+      const qrDoc = new QRCode({
         uniqueId,
-        productId: product._id,
-        variantName: variantName,
-        articleName: foundArticle.name, // Use article.name
-        batchId,
+        articleName: article.articleName,
         qrData: qrString,
-        qrImagePath: filePath,
+        qrImagePath: qrCodeDataURL,
         status: 'generated',
-        generatedBy: userId,
-        generatedAt: new Date()
+
+        productReference: {
+          productId: article.productId,
+          variantId: article.variantId,
+          articleId: article.articleId, // ✅ Store article ID
+          variantName: article.variantName,
+          articleName: article.articleName,
+          isMatched: true,
+          matchedBy: req.user?._id,
+          matchedAt: new Date()
+        },
+
+        batchInfo: {
+          contractorId: userId,
+          batchId
+        },
+
+        contractorInput: {
+          articleName,
+          articleId: article.articleId, // ✅ Store article ID here too
+          color: colorsArray.join(', '),
+          size: sizesDisplay,
+          cartonNumber: i,
+          totalCartons: numberOfQRs
+        },
+
+        manufacturingDetails: {
+          manufacturedAt: new Date(),
+          manufacturedBy: { userId, userType: 'contractor', name: req.user.name }
+        }
       });
 
       await qrDoc.save();
 
       qrCodes.push({
-        id: `qr_${uniqueId}`,
         uniqueId,
-        dataURL: qrCodeDataURL,
         qrCodeImage: qrCodeDataURL,
-        fileName,
-        filePath,
-        qrData: qrDataObj,
-        serialNumber: i + 1
+        cartonNumber: i,
+        batchId,
+        labelData: qrPayload.labelData
       });
-    }
-
-    // Update article's QR tracking stats
-    try {
-      await Product.findOneAndUpdate(
-        { 
-          _id: product._id,
-          'variants.name': variantName,
-          'variants.articles._id': foundArticle._id
-        },
-        {
-          $inc: {
-            'variants.$[variant].articles.$[article].qrTracking.totalQRsGenerated': numberOfQRs,
-            'variants.$[variant].articles.$[article].qrTracking.activeQRs': numberOfQRs
-          },
-          $set: {
-            'variants.$[variant].articles.$[article].qrTracking.lastQRGenerated': new Date()
-          }
-        },
-        {
-          arrayFilters: [
-            { 'variant.name': variantName },
-            { 'article._id': foundArticle._id }
-          ]
-        }
-      );
-    } catch (updateError) {
-      console.log('QR tracking update failed (non-critical):', updateError.message);
-      // Continue execution as this is not critical
     }
 
     res.status(200).json({
       result: true,
-      message: `Successfully generated ${numberOfQRs} QR codes`,
-      qrCodes,
-      batchId,
-      batchDetails: {
+      message: `Successfully generated ${numberOfQRs} QR code labels for ${article.articleName}`,
+      data: {
         batchId,
-        articleName: foundArticle.name,
-        segment: segment || product.segment,
-        variant: variantName,
-        numberOfQRs,
-        generatedAt: new Date(),
-        lifecycle: {
-          currentStage: 'generated',
-          nextStage: 'manufacturing'
+        qrCodes,
+        articleInfo: {
+          articleId: article.articleId,
+          articleName: article.articleName,
+          productId: article.productId,
+          variantId: article.variantId,
+          variantName: article.variantName,
+          segment: article.segment,
+          colors: colorsArray,
+          sizes: sizesArray,
+          sizesDisplay: sizesDisplay,
+          numberOfQRs
         }
       }
     });
@@ -539,16 +607,15 @@ const generateQRCodes = async (req, res) => {
     console.error('Error generating QR codes:', error);
     res.status(500).json({
       result: false,
-      message: "Failed to generate QR codes",
+      message: 'Failed to generate QR codes',
       error: error.message
     });
   }
 };
 
-
 const downloadQRCodes = async (req, res) => {
   try {
-    const { qrCodes, batchId } = req.body;
+    const { qrCodes, batchId, articleInfo } = req.body;
 
     if (!qrCodes || !Array.isArray(qrCodes) || qrCodes.length === 0) {
       return res.status(400).json({
@@ -582,15 +649,6 @@ const downloadQRCodes = async (req, res) => {
         setTimeout(() => {
           try {
             if (fs.existsSync(zipFilePath)) fs.unlinkSync(zipFilePath);
-            qrCodes.forEach(qr => {
-              if (qr.filePath && fs.existsSync(qr.filePath)) {
-                fs.unlinkSync(qr.filePath);
-              }
-              const qrDirectory = path.dirname(qr.filePath);
-              if (fs.existsSync(qrDirectory)) {
-                fs.rmdirSync(qrDirectory, { recursive: true });
-              }
-            });
           } catch (cleanupErr) {
             console.error('Cleanup error:', cleanupErr);
           }
@@ -610,85 +668,119 @@ const downloadQRCodes = async (req, res) => {
     archive.pipe(output);
 
     // Add QR code images to archive
-    qrCodes.forEach(qr => {
-      if (qr.filePath && fs.existsSync(qr.filePath)) {
-        archive.file(qr.filePath, { name: qr.fileName });
-      } else if (qr.qrCodeImage) {
+    qrCodes.forEach((qr, idx) => {
+      if (qr.qrCodeImage) {
+        // QR code image stored as base64 data URL
         const base64Data = qr.qrCodeImage.replace(/^data:image\/png;base64,/, '');
         const buffer = Buffer.from(base64Data, 'base64');
-        archive.append(buffer, { name: qr.fileName });
+        
+        // Generate filename based on carton number and uniqueId
+        const fileName = `QR_${articleInfo?.savedAsArticleName || 'Article'}_Carton_${String(qr.cartonNumber).padStart(3, '0')}_${qr.uniqueId.slice(0, 8)}.png`;
+        archive.append(buffer, { name: fileName });
       }
     });
 
-    // Enhanced informational text file with lifecycle stages
+    // Enhanced informational text file
     const infoContent = `QR Code Batch Information
 ========================
 Batch ID: ${batchId || 'N/A'}
-Total QR Codes: ${qrCodes.length}
+Article Name: ${articleInfo?.savedAsArticleName || 'N/A'}
+Contractor Input: ${articleInfo?.contractorInput || 'N/A'}
+Match Type: ${articleInfo?.matchType || 'N/A'}
+Match Confidence: ${articleInfo?.confidence || 'N/A'}%
+Is New Article: ${articleInfo?.isNewArticle ? 'Yes' : 'No'}
+Total Cartons: ${qrCodes.length}
 Generated On: ${new Date().toISOString()}
+${articleInfo?.needsAdminValidation ? 'REQUIRES ADMIN VALIDATION' : 'VALIDATED'}
+
+Product Details:
+===============
+Product ID: ${articleInfo?.productId || 'N/A'}
+Variant: ${articleInfo?.variantName || 'N/A'}
+Segment: ${articleInfo?.segment || 'N/A'}
+Colors: ${Array.isArray(articleInfo?.colors) ? articleInfo.colors.join(', ') : 'N/A'}
+Sizes: ${Array.isArray(articleInfo?.sizes) ? articleInfo.sizes.join(', ') : 'N/A'}
 
 Lifecycle Stages:
 ================
-1. MANUFACTURING - Scan when product is manufactured
-2. WAREHOUSE - Scan when received at warehouse
-3. DISTRIBUTOR - Scan when shipped to distributor
+1. GENERATED - QR codes created by contractor ✅
+2. MANUFACTURED - Scan when product manufacturing is complete
+3. RECEIVED - Scan when received at warehouse
+4. SHIPPED - Scan when shipped to distributor
 
 QR Code Details:
 ================
 ${qrCodes.map((qr, idx) => {
-  let scanUrls = {};
-  try {
-    const data = JSON.parse(qr.qrData);
-    scanUrls = data.scanUrls || {};
-  } catch { }
-  return `QR Code #${qr.serialNumber || idx + 1}:
-  File: ${qr.fileName}
-  Unique ID: ${qr.uniqueId || 'N/A'}
-  Manufacturing URL: ${scanUrls.manufacturing || 'N/A'}
-  Warehouse URL: ${scanUrls.warehouse || 'N/A'}
-  Distributor URL: ${scanUrls.distributor || 'N/A'}
+      let qrData = {};
+      try {
+        qrData = JSON.parse(qr.qrData);
+      } catch (e) { 
+        console.log('Error parsing QR data:', e);
+      }
+      
+      return `Carton #${qr.cartonNumber || idx + 1}:
+  Unique ID: ${qr.uniqueId}
+  Carton: ${qr.cartonNumber} of ${qrData.contractorInput?.totalCartons || qrCodes.length}
+  Status: ${qrData.status || 'generated'}
+  Generated At: ${qrData.generatedAt || 'N/A'}
+  Scan URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}/scan/${qr.uniqueId}
 ${'='.repeat(60)}`;
-}).join('\n\n')}
+    }).join('\n\n')}
 
-Instructions:
-=============
-1. Manufacturing Stage: Scan QR codes when products are manufactured
-2. Warehouse Stage: Scan QR codes when received at warehouse
-3. Distributor Stage: Scan QR codes when shipping to distributors
-4. Each scan is tracked with timestamp and location
-5. Use the Unique ID for manual verification if needed
+Scanning Instructions:
+=====================
+1. Use QR scanner app or camera to scan codes
+2. Each scan updates the carton status in real-time
+3. Track cartons through: Generated → Manufactured → Received → Shipped
+4. Use Unique ID for manual lookup if needed
 
-Scan URLs:
-==========
-Manufacturing: Use the manufacturing URL for first scan
-Warehouse: Use the warehouse URL for second scan  
-Distributor: Use the distributor URL for final scan
+Quality Control:
+===============
+- Each carton has individual tracking
+- Batch grouping for easy management
+- Real-time status updates
+- Full audit trail maintained
+
+Support Information:
+===================
+For technical support, contact system administrator.
+Batch ID: ${batchId}
+Generated: ${new Date().toLocaleString()}
 `;
 
     archive.append(infoContent, { name: 'QR_Batch_Information.txt' });
 
-    // Enhanced CSV file with lifecycle URLs
-    const csvLines = [
-      'Serial Number,Unique ID,File Name,Product Name,Variant,Generated At,Manufacturing URL,Warehouse URL,Distributor URL',
-      ...qrCodes.map(qr => {
-        let data = {};
-        try {
-          data = JSON.parse(qr.qrData);
-        } catch { }
-        return [
-          qr.serialNumber || '',
-          qr.uniqueId || '',
-          `"${qr.fileName}"`,
-          `"${data.productName || ''}"`,
-          `"${data.variant || ''}"`,
-          `"${data.generatedAt || ''}"`,
-          `"${data.scanUrls?.manufacturing || ''}"`,
-          `"${data.scanUrls?.warehouse || ''}"`,
-          `"${data.scanUrls?.distributor || ''}"`
-        ].join(',');
-      })
-    ];
-    archive.append(csvLines.join('\n'), { name: 'QR_Codes_Data.csv' });
+    // Add a PDF receipt-style summary
+    const receiptContent = `
+===============================================
+        QR CODE BATCH RECEIPT
+===============================================
+
+Batch ID: ${batchId}
+Date: ${new Date().toLocaleString()}
+
+Article: ${articleInfo?.savedAsArticleName || 'N/A'}
+Input: ${articleInfo?.contractorInput || 'N/A'}
+${articleInfo?.matchType === 'fuzzy' ? `(Auto-corrected from "${articleInfo.contractorInput}")` : ''}
+${articleInfo?.isNewArticle ? '⚠️  NEW ARTICLE CREATED' : ''}
+
+Cartons Generated: ${qrCodes.length}
+Colors: ${Array.isArray(articleInfo?.colors) ? articleInfo.colors.join(', ') : 'N/A'}
+Sizes: ${Array.isArray(articleInfo?.sizes) ? articleInfo.sizes.join(', ') : 'N/A'}
+
+Status: ${articleInfo?.needsAdminValidation ? '⏳ PENDING VALIDATION' : '✅ VALIDATED'}
+
+Next Steps:
+- Print and attach QR codes to cartons
+- Scan during manufacturing process
+- Track through warehouse and shipment
+
+===============================================
+    For support: Contact System Administrator
+===============================================
+`;
+
+    archive.append(receiptContent, { name: 'Batch_Receipt.txt' });
 
     await archive.finalize();
 
@@ -702,8 +794,7 @@ Distributor: Use the distributor URL for final scan
   }
 };
 
-
-
+// Unified scan controller: uses only 'manufactured' | 'received' | 'shipped'
 const scanQRCode = async (req, res) => {
   try {
     const { uniqueId } = req.params;
@@ -711,457 +802,180 @@ const scanQRCode = async (req, res) => {
       scannedBy,
       location,
       event,
-      userAgent,
-      ipAddress,
       notes,
       qualityCheck,
-      distributorDetails,
+      distributorDetails, // { distributorId, distributorName }
       trackingNumber
     } = req.body;
 
-    const qrCode = await QRCode.findOne({ uniqueId }).populate('productId');
+    const qrCode = await QRCode.findOne({ uniqueId });
 
     if (!qrCode) {
-      return res.status(404).json({ 
-        result: false, 
-        message: "QR code not found or invalid QR" 
+      return res.status(404).json({
+        result: false,
+        message: "QR code not found or invalid QR"
+      });
+    }
+
+    // Ensure articleName is set
+    if (!qrCode.articleName && qrCode.contractorInput?.articleName) {
+      qrCode.articleName = qrCode.contractorInput.articleName;
+    }
+
+    // ✅ ONLY accept 'received' and 'shipped' events
+    const allowedEvents = new Set(['received', 'shipped']);
+    if (!allowedEvents.has(event)) {
+      return res.status(400).json({
+        result: false,
+        message: "Invalid event. Only 'received' and 'shipped' are allowed"
       });
     }
 
     const scans = qrCode.scans || [];
+    const hasReceived = scans.some(s => s.event === 'received') || qrCode.status === 'received';
+    const hasShipped = scans.some(s => s.event === 'shipped') || qrCode.status === 'shipped';
 
-    // Validate scan sequence - must follow manufacturing → warehouse → distributor
-    const hasManufactured = scans.some(s => s.event === 'manufactured');
-    const hasReceived = scans.some(s => s.event === 'received');
-    const hasShipped = scans.some(s => s.event === 'shipped');
-
-    // Manufacturing stage validation
-    if (event === 'manufactured') {
-      if (hasManufactured) {
-        return res.status(400).json({
-          result: false,
-          message: "This QR code has already been scanned for manufacturing"
-        });
-      }
+    // Validation logic
+    if (event === 'received' && hasReceived) {
+      return res.status(400).json({
+        result: false,
+        message: "This carton has already been received at warehouse"
+      });
     }
 
-    // Warehouse receipt validation
-    if (event === 'received') {
-      if (!hasManufactured) {
-        return res.status(400).json({
-          result: false,
-          message: "Cannot receive a product that hasn't been manufactured yet"
-        });
-      }
-      if (hasReceived) {
-        return res.status(400).json({
-          result: false,
-          message: "This Carton has already been received at warehouse"
-        });
-      }
-    }
-
-    // Distributor shipment validation
     if (event === 'shipped') {
-      if (!hasManufactured || !hasReceived) {
+      if (!hasReceived) {
         return res.status(400).json({
           result: false,
-          message: "Cannot ship a product that hasn't been manufactured and received at warehouse"
+          message: "Cannot ship a carton that hasn't been received at warehouse yet"
         });
       }
       if (hasShipped) {
         return res.status(400).json({
           result: false,
-          message: "This Carton has already been shipped to distributor"
+          message: "This carton has already been shipped"
         });
       }
     }
 
-    // Helper function to map userType to correct enum values
-    const mapUserType = (userType) => {
-      const userTypeMap = {
-        'manufacturing': 'manufacturer',
-        'warehouse': 'warehouse', 
-        'distributor': 'distributor',
-        'admin': 'admin',
-        'customer': 'customer'
-      };
-      return userTypeMap[userType] || 'admin';
-    };
-
+    // Create scan record
     const scanRecord = {
       scannedAt: new Date(),
-      scannedBy: {
-        userId: scannedBy?.userId || 'anonymous',
-        userType: mapUserType(scannedBy?.userType || 'admin'),
-        name: scannedBy?.name
-      },
-      location,
+      scannedBy: req.user?._id,
       event,
-      notes,
-      metadata: {
-        userAgent,
-        ipAddress,
-        qualityCheck,
-        distributorDetails,
-        trackingNumber
-      }
+      notes: notes || '',
+      location: location || 'Main Warehouse',
+      qualityCheck: qualityCheck || { passed: true, notes: '' }
     };
 
     qrCode.scans.push(scanRecord);
-    qrCode.totalScans += 1;
+    qrCode.totalScans = (qrCode.totalScans || 0) + 1;
     if (!qrCode.firstScannedAt) qrCode.firstScannedAt = new Date();
     qrCode.lastScannedAt = new Date();
 
-    // Handle Manufacturing Stage
-    if (event === 'manufactured') {
-      qrCode.status = 'manufactured';
-      qrCode.manufacturingDetails = {
-        manufacturedAt: new Date(),
-        manufacturedBy: {
-          userId: scannedBy?.userId,
-          userType: mapUserType(scannedBy?.userType || 'manufacturer'),
-          name: scannedBy?.name
-        },
-        manufacturingLocation: location,
-        qualityCheck: qualityCheck || { passed: true, notes: '' }
-      };
-
-      // Get article details from the product
-      const product = qrCode.productId;
-      let articleDetails = null;
-      
-      for (const variant of product.variants || []) {
-        const article = variant.articles?.find(art => art.name === qrCode.articleName);
-        if (article) {
-          articleDetails = article;
-          break;
-        }
-      }
-
-      if (!articleDetails) {
-        return res.status(400).json({
-          result: false,
-          message: "Article details not found in product variants"
-        });
-      }
-
-      // Add to inventory at manufactured stage
-      let inventory = await Inventory.findOne({ productId: qrCode.productId });
-      
-      if (!inventory) {
-        inventory = new Inventory({
-          productId: qrCode.productId,
-          items: []
-        });
-      }
-
-      inventory.items.push({
-        qrCodeId: qrCode._id,
-        uniqueId: qrCode.uniqueId,
-        articleName: qrCode.articleName,
-        articleDetails: articleDetails,
-        manufacturedAt: new Date(),
-        manufacturedBy: {
-          userId: scannedBy?.userId,
-          userType: mapUserType(scannedBy?.userType || 'manufacturer'),
-          name: scannedBy?.name
-        },
-        manufacturingLocation: location,
-        status: 'manufactured',
-        lifecycle: [{
-          stage: 'manufactured',
-          timestamp: new Date(),
-          location: location?.address,
-          performedBy: scannedBy?.name,
-          notes
-        }],
-        notes
-      });
-
-      await inventory.save();
-
-      // ✅ FIXED: Only increment manufactured count
-      await Product.findOneAndUpdate(
-        { _id: qrCode.productId, 'variants.articles.name': qrCode.articleName },
-        {
-          $push: {
-            'variants.$[variant].articles.$[article].scannedHistory': {
-              qrCodeId: qrCode._id,
-              scannedAt: new Date(),
-              scannedBy: scannedBy?.name,
-              event,
-              location: location?.address,
-              notes
-            }
-          },
-          $inc: {
-            'variants.$[variant].articles.$[article].qrTracking.manufacturedQRs': 1
-          }
-        },
-        {
-          arrayFilters: [
-            { 'variant.articles.name': qrCode.articleName },
-            { 'article.name': qrCode.articleName }
-          ]
-        }
-      );
-
-      await qrCode.save();
-
-      return res.status(200).json({
-        result: true,
-        message: "QR code scanned for manufacturing successfully",
-        data: {
-          qrCode: {
-            uniqueId: qrCode.uniqueId,
-            status: qrCode.status,
-            totalScans: qrCode.totalScans,
-            currentStage: 'manufactured',
-            nextStage: 'warehouse_receipt'
-          },
-          inventory: {
-            totalQuantity: inventory.totalQuantity,
-            quantityByStage: inventory.quantityByStage
-          },
-          scanDetails: scanRecord
-        }
-      });
-    }
-
-    // Handle Warehouse Receipt Stage
+    // ✅ Handle Warehouse Receipt (received)
     if (event === 'received') {
       qrCode.status = 'received';
       qrCode.warehouseDetails = {
         receivedAt: new Date(),
         receivedBy: {
-          userId: scannedBy?.userId,
-          userType: mapUserType(scannedBy?.userType || 'warehouse'),
-          name: scannedBy?.name
+          userId: req.user?._id,
+          userType: 'warehouse_inspector',
+          name: req.user?.name || 'Warehouse Inspector'
         },
-        warehouseLocation: location,
-        conditionOnReceipt: 'good'
+        conditionOnReceipt: qualityCheck?.passed ? 'good' : 'damaged',
+        location: location || 'Main Warehouse',
+        notes: notes || ''
       };
 
-      // Update inventory item status
-      const inventory = await Inventory.findOne({ productId: qrCode.productId });
-      
-      if (!inventory) {
-        return res.status(400).json({
-          result: false,
-          message: "No inventory found for this product"
-        });
+      try {
+        await updateInventoryFromQRScan(qrCode, req.user, qualityCheck, notes);
+      } catch (inventoryError) {
+        console.warn('Inventory update failed on receive:', inventoryError.message);
       }
-
-      const itemIndex = inventory.items.findIndex(item => 
-        item.qrCodeId.toString() === qrCode._id.toString()
-      );
-
-      if (itemIndex === -1) {
-        return res.status(400).json({
-          result: false,
-          message: "Item not found in inventory"
-        });
-      }
-
-      // Update inventory item
-      inventory.items[itemIndex].receivedAt = new Date();
-      inventory.items[itemIndex].receivedBy = {
-        userId: scannedBy?.userId,
-        userType: mapUserType(scannedBy?.userType || 'warehouse'),
-        name: scannedBy?.name
-      };
-      inventory.items[itemIndex].receivedLocation = location;
-      inventory.items[itemIndex].status = 'in_warehouse';
-      inventory.items[itemIndex].lifecycle.push({
-        stage: 'received_warehouse',
-        timestamp: new Date(),
-        location: location?.address,
-        performedBy: scannedBy?.name,
-        notes
-      });
-
-      await inventory.save();
-
-      // ✅ FIXED: Transfer from manufactured to received (decrement manufactured, increment received)
-      await Product.findOneAndUpdate(
-        { _id: qrCode.productId, 'variants.articles.name': qrCode.articleName },
-        {
-          $push: {
-            'variants.$[variant].articles.$[article].scannedHistory': {
-              qrCodeId: qrCode._id,
-              scannedAt: new Date(),
-              scannedBy: scannedBy?.name,
-              event,
-              location: location?.address,
-              notes
-            }
-          },
-          $inc: {
-            'variants.$[variant].articles.$[article].qrTracking.manufacturedQRs': -1, // ✅ Remove from manufactured
-            'variants.$[variant].articles.$[article].qrTracking.receivedQRs': 1        // ✅ Add to received
-          }
-        },
-        {
-          arrayFilters: [
-            { 'variant.articles.name': qrCode.articleName },
-            { 'article.name': qrCode.articleName }
-          ]
-        }
-      );
 
       await qrCode.save();
 
       return res.status(200).json({
         result: true,
-        message: "QR code scanned for warehouse receipt successfully",
+        message: "Warehouse receipt scan completed successfully",
         data: {
           qrCode: {
             uniqueId: qrCode.uniqueId,
+            articleName: qrCode.articleName,
             status: qrCode.status,
-            totalScans: qrCode.totalScans,
             currentStage: 'in_warehouse',
-            nextStage: 'distributor_shipment'
-          },
-          inventory: {
-            totalQuantity: inventory.totalQuantity,
-            quantityByStage: inventory.quantityByStage,
-            availableQuantity: inventory.availableQuantity
+            nextStage: 'shipment'
           },
           scanDetails: scanRecord
         }
       });
     }
 
-    // Handle Distributor Shipment Stage
+    // ✅ Handle Shipment (shipped)
     if (event === 'shipped') {
       qrCode.status = 'shipped';
-      qrCode.distributorDetails = {
+      qrCode.shipmentDetails = {
         shippedAt: new Date(),
         shippedBy: {
-          userId: scannedBy?.userId,
-          userType: mapUserType(scannedBy?.userType || 'warehouse'),
-          name: scannedBy?.name
+          userId: req.user?._id,
+          userType: 'shipment_manager',
+          name: req.user?.name || 'Shipment Manager'
         },
         distributorId: distributorDetails?.distributorId,
         distributorName: distributorDetails?.distributorName,
-        trackingNumber: trackingNumber
+        trackingNumber,
+        notes: notes || ''
       };
 
-      // Update inventory item
-      const inventory = await Inventory.findOne({ productId: qrCode.productId });
-      
-      if (!inventory) {
-        return res.status(400).json({
-          result: false,
-          message: "No inventory found for this product"
-        });
-      }
+      try {
+        const shipment = await updateInventoryOnShipment(qrCode, req.user, distributorDetails);
+        await qrCode.save();
 
-      const itemIndex = inventory.items.findIndex(item => 
-        item.qrCodeId.toString() === qrCode._id.toString()
-      );
-
-      if (itemIndex === -1) {
-        return res.status(400).json({
-          result: false,
-          message: "Item not found in inventory"
-        });
-      }
-
-      // Update inventory item
-      inventory.items[itemIndex].shippedAt = new Date();
-      inventory.items[itemIndex].shippedBy = {
-        userId: scannedBy?.userId,
-        userType: mapUserType(scannedBy?.userType || 'warehouse'),
-        name: scannedBy?.name
-      };
-      inventory.items[itemIndex].distributorDetails = {
-        distributorId: distributorDetails?.distributorId,
-        distributorName: distributorDetails?.distributorName,
-        trackingNumber: trackingNumber
-      };
-      inventory.items[itemIndex].status = 'shipped_to_distributor';
-      inventory.items[itemIndex].lifecycle.push({
-        stage: 'shipped_distributor',
-        timestamp: new Date(),
-        location: distributorDetails?.distributorName,
-        performedBy: scannedBy?.name,
-        notes
-      });
-
-      await inventory.save();
-
-      // ✅ FIXED: Transfer from received to shipped (decrement received, increment shipped)
-      await Product.findOneAndUpdate(
-        { _id: qrCode.productId, 'variants.articles.name': qrCode.articleName },
-        {
-          $push: {
-            'variants.$[variant].articles.$[article].scannedHistory': {
-              qrCodeId: qrCode._id,
-              scannedAt: new Date(),
-              scannedBy: scannedBy?.name,
-              event,
-              location: location?.address,
-              notes
-            }
-          },
-          $inc: {
-            'variants.$[variant].articles.$[article].qrTracking.receivedQRs': -1,    // ✅ Remove from received
-            'variants.$[variant].articles.$[article].qrTracking.shippedQRs': 1,     // ✅ Add to shipped
-            'variants.$[variant].articles.$[article].qrTracking.activeQRs': -1      // ✅ Reduce active count
+        return res.status(200).json({
+          result: true,
+          message: "Shipment scan completed successfully",
+          data: {
+            qrCode: {
+              uniqueId: qrCode.uniqueId,
+              articleName: qrCode.articleName,
+              status: qrCode.status,
+              currentStage: 'shipped',
+              nextStage: 'delivered'
+            },
+            shipmentDetails: {
+              shipmentId: shipment?.shipmentId,
+              distributorName: qrCode.shipmentDetails.distributorName,
+              trackingNumber,
+              shippedAt: qrCode.shipmentDetails.shippedAt
+            },
+            scanDetails: scanRecord
           }
-        },
-        {
-          arrayFilters: [
-            { 'variant.articles.name': qrCode.articleName },
-            { 'article.name': qrCode.articleName }
-          ]
-        }
-      );
-
-      await qrCode.save();
-
-      return res.status(200).json({
-        result: true,
-        message: "QR code scanned for distributor shipment successfully",
-        data: {
-          qrCode: {
-            uniqueId: qrCode.uniqueId,
-            status: qrCode.status,
-            totalScans: qrCode.totalScans,
-            currentStage: 'shipped_to_distributor',
-            nextStage: 'completed'
-          },
-          inventory: {
-            totalQuantity: inventory.totalQuantity,
-            quantityByStage: inventory.quantityByStage,
-            availableQuantity: inventory.availableQuantity
-          },
-          distributorDetails: qrCode.distributorDetails,
-          scanDetails: scanRecord
-        }
-      });
+        });
+      } catch (shipmentError) {
+        console.warn('Shipment processing failed:', shipmentError.message);
+        return res.status(500).json({
+          result: false,
+          message: "Failed to process shipment",
+          error: shipmentError.message
+        });
+      }
     }
 
-    // For other events, just save the qrCode
+    // Fallback (should not reach here)
     await qrCode.save();
-
     return res.status(200).json({
       result: true,
       message: "QR code scanned successfully",
       data: {
         qrCode: {
           uniqueId: qrCode.uniqueId,
-          status: qrCode.status,
-          totalScans: qrCode.totalScans,
-          firstScannedAt: qrCode.firstScannedAt,
-          lastScannedAt: qrCode.lastScannedAt
+          articleName: qrCode.articleName,
+          status: qrCode.status
         },
         scanDetails: scanRecord
       }
     });
-
   } catch (error) {
     console.error('Error scanning QR code:', error);
     res.status(500).json({
@@ -1175,79 +989,800 @@ const scanQRCode = async (req, res) => {
 
 
 
+// ✅ Updated inventory function for your workflow
+// ✅ Updated inventory function for your workflow
+const updateInventoryFromQRScan = async (qrCode, user, qualityCheck, notes) => {
+  try {
+    // Get article name from QR code
+    const articleName = qrCode.contractorInput?.articleName || qrCode.articleName;
+    
+    if (!articleName) {
+      throw new Error('Article name not found in QR code data');
+    }
+
+    console.log('🔍 Searching for article:', articleName);
+
+    // ✅ Search using MongoDB aggregation for nested articles
+    const productWithArticle = await Product.aggregate([
+      { $unwind: '$variants' },
+      { $unwind: '$variants.articles' },
+      { 
+        $match: { 
+          'variants.articles.name': { $regex: new RegExp('^' + articleName + '$', 'i') }
+        }
+      },
+      { $limit: 1 }
+    ]);
+
+    if (!productWithArticle || productWithArticle.length === 0) {
+      throw new Error(`Product not found for article: ${articleName}`);
+    }
+    
+    // Get the original product document
+    const foundProduct = await Product.findById(productWithArticle[0]._id);
+    if (!foundProduct) {
+      throw new Error(`Product document not found for article: ${articleName}`);
+    }
+    
+    // Find or create inventory record
+    let inventory = await Inventory.findOne({ productId: foundProduct._id });
+    
+    if (!inventory) {
+      inventory = new Inventory({
+        productId: foundProduct._id,
+        items: []
+      });
+    }
+
+    // Sync the QR code data with inventory (will set status to 'received')
+    await inventory.syncWithQRCode(qrCode._id);
+    
+    console.log('✅ Inventory updated successfully for article:', articleName);
+    console.log('📊 Inventory counts:', {
+      received: inventory.quantityByStage.received,
+      shipped: inventory.quantityByStage.shipped,
+      availableQuantity: inventory.availableQuantity
+    });
+    
+    return inventory;
+
+  } catch (error) {
+    console.error('Error updating inventory from QR scan:', error);
+    throw error;
+  }
+};
+
+// ✅ Updated shipment function for your workflow
+const updateInventoryOnShipment = async (qrCode, user, distributorDetails) => {
+  try {
+    const articleNameFromQR = qrCode.contractorInput?.articleName || qrCode.articleName || 'Unknown';
+    
+    // Find the product using aggregation
+    const productWithArticle = await Product.aggregate([
+      { $unwind: '$variants' },
+      { $unwind: '$variants.articles' },
+      { 
+        $match: { 
+          'variants.articles.name': { $regex: new RegExp('^' + articleNameFromQR + '$', 'i') }
+        }
+      },
+      { $limit: 1 }
+    ]);
+
+    if (!productWithArticle || productWithArticle.length === 0) {
+      throw new Error(`Product not found for article: ${articleNameFromQR}`);
+    }
+
+    const product = await Product.findById(productWithArticle[0]._id);
+    const inventory = await Inventory.findOne({ productId: product._id });
+    
+    if (!inventory) {
+      throw new Error('Inventory record not found');
+    }
+
+    // Sync with updated QR code status (moves from received to shipped)
+    await inventory.syncWithQRCode(qrCode._id);
+    
+    // ✅ CREATE OR UPDATE SHIPMENT RECORD
+    await createOrUpdateShipment(qrCode, user, distributorDetails);
+    
+    console.log('✅ Inventory updated on shipment');
+    console.log('📊 Updated inventory stats:', {
+      received: inventory.quantityByStage.received,
+      shipped: inventory.quantityByStage.shipped,
+      availableQuantity: inventory.availableQuantity
+    });
+
+    return inventory;
+
+  } catch (error) {
+    console.error('Error updating inventory on shipment:', error);
+    throw error;
+  }
+};
 
 const getInventoryData = async (req, res) => {
   try {
-    const productId = req.params.productId || req.query.productId;
-    if (!productId) {
-      return res.status(400).json({
-        result: false,
-        message: 'Product ID is required'
-      });
-    }
-
-    // Get inventory for product with populated QR codes
-    const inventory = await Inventory.findOne({ productId })
-      .populate({
-        path: 'items.qrCodeId',
-        select: 'uniqueId status totalScans scans createdAt batchId',
-        populate: {
-          path: 'batchId',
-          select: 'batchId articleName'
-        }
-      })
-      .lean();
-
-    // Get full product data
-    const product = await Product.findById(productId).lean();
+    const { productId } = req.params;
     
-    if (!product) {
-      return res.status(404).json({
-        result: false,
-        message: 'Product not found'
-      });
+    let query = {};
+    if (productId && productId !== 'all') {
+      query.productId = productId;
     }
 
-    // Calculate additional metrics
-    const itemsWithQRDetails = inventory?.items?.map(item => ({
-      ...item,
-      qrCodeDetails: item.qrCodeId ? {
-        uniqueId: item.qrCodeId.uniqueId,
-        status: item.qrCodeId.status,
-        totalScans: item.qrCodeId.totalScans,
-        lastScannedAt: item.qrCodeId.scans?.length > 0 
-          ? item.qrCodeId.scans[item.qrCodeId.scans.length - 1].scannedAt 
-          : null,
-        batchInfo: item.qrCodeId.batchId
-      } : null
-    })) || [];
+    const inventories = await Inventory.find(query)
+      .populate('productId', 'segment variants')
+      .populate('items.manufacturedBy', 'name phoneNo')
+      .populate('items.receivedBy', 'name phoneNo') 
+      .populate('items.shippedBy', 'name phoneNo')
+      .populate('items.distributorId', 'name phoneNo distributorDetails')
+      .sort({ lastUpdated: -1 });
 
-    return res.status(200).json({
+    // ✅ Format response with detailed breakdown
+    const inventoryData = inventories.map(inventory => ({
+      productId: inventory.productId._id,
+      product: inventory.productId,
+      summary: {
+        totalQuantity: inventory.totalQuantity,
+        availableQuantity: inventory.availableQuantity,
+        stages: inventory.quantityByStage
+      },
+      items: inventory.items.map(item => ({
+        qrCodeId: item.qrCodeId,
+        uniqueId: item.uniqueId,
+        articleName: item.articleName,
+        articleDetails: item.articleDetails,
+        status: item.status,
+        timestamps: {
+          manufactured: item.manufacturedAt,
+          received: item.receivedAt,
+          shipped: item.shippedAt
+        },
+        users: {
+          manufacturedBy: item.manufacturedBy,
+          receivedBy: item.receivedBy,
+          shippedBy: item.shippedBy
+        },
+        distributor: item.distributorId,
+        notes: item.notes
+      })),
+      lastUpdated: inventory.lastUpdated
+    }));
+
+    res.status(200).json({
       result: true,
-      message: 'Inventory and product data retrieved',
+      message: 'Inventory data retrieved successfully',
       data: {
-        inventoryCount: inventory ? inventory.totalQuantity : 0,
-        availableQuantity: inventory ? inventory.availableQuantity : 0,
-        reservedQuantity: inventory ? inventory.reservedQuantity || 0 : 0,
-        inventoryItems: itemsWithQRDetails,
-        product,
-        lastUpdated: inventory ? inventory.lastUpdated : null
+        inventories: inventoryData,
+        totalRecords: inventories.length
       }
     });
+
   } catch (error) {
     console.error('Error fetching inventory data:', error);
     res.status(500).json({
       result: false,
-      message: 'Failed to get inventory data',
+      message: 'Failed to fetch inventory data',
       error: error.message
     });
+  }
+};
+
+// ✅ Controller to get inventory stats for dashboard
+const getInventoryStats = async (req, res) => {
+  try {
+    const inventories = await Inventory.find({});
+    
+    let totalStats = {
+      totalItems: 0,
+      availableItems: 0,
+      generated: 0,
+      manufactured: 0,
+      received: 0,
+      shipped: 0
+    };
+
+    inventories.forEach(inventory => {
+      totalStats.totalItems += inventory.totalQuantity;
+      totalStats.availableItems += inventory.availableQuantity;
+      totalStats.generated += inventory.quantityByStage.generated;
+      totalStats.manufactured += inventory.quantityByStage.manufactured;
+      totalStats.received += inventory.quantityByStage.received;
+      totalStats.shipped += inventory.quantityByStage.shipped;
+    });
+
+    res.status(200).json({
+      result: true,
+      message: 'Inventory stats retrieved successfully',
+      data: totalStats
+    });
+
+  } catch (error) {
+    console.error('Error fetching inventory stats:', error);
+    res.status(500).json({
+      result: false,
+      message: 'Failed to fetch inventory stats',
+      error: error.message
+    });
+  }
+};
+
+// Generate PDF receipt using PDFKit
+// Add this route handler for PDF receipt generation
+const generateShipmentReceipt = async (req, res) => {
+  try {
+    const { shipmentId } = req.params;
+    
+    // Fetch actual shipment data
+    const shipment = await Shipment.findOne({ shipmentId })
+      .populate('distributorId', 'distributorDetails phoneNo')
+      .populate('shippedBy', 'name')
+      .populate({
+        path: 'items.qrCodeId',
+        select: 'contractorInput articleName'
+      });
+
+    if (!shipment) {
+      return res.status(404).json({
+        result: false,
+        message: 'Shipment not found'
+      });
+    }
+
+    // Create PDF document
+    const PDFDocument = require('pdfkit');
+    const doc = new PDFDocument({ 
+      size: 'A4',
+      margin: 50 
+    });
+
+    // Set response headers for PDF download
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="Shipment_${shipmentId}_Receipt.pdf"`);
+
+    // Pipe PDF to response
+    doc.pipe(res);
+
+    // Header Section
+    doc.fontSize(24)
+       .fillColor('#2563eb')
+       .text('📦 SHIPMENT RECEIPT', 50, 50, { align: 'center' });
+
+    doc.fontSize(12)
+       .fillColor('#666666')
+       .text('Official Shipping Documentation', 50, 80, { align: 'center' });
+
+    // Draw header line
+    doc.strokeColor('#2563eb')
+       .lineWidth(3)
+       .moveTo(50, 100)
+       .lineTo(545, 100)
+       .stroke();
+
+    // Company Info Section
+    doc.fontSize(16)
+       .fillColor('#1f2937')
+       .text('Warehouse Management System', 50, 130);
+
+    doc.fontSize(10)
+       .fillColor('#666666')
+       .text('Address: Main Warehouse Facility', 50, 150)
+       .text('Phone: +91 XXXXX XXXXX', 50, 165)
+       .text('Email: warehouse@company.com', 50, 180);
+
+    // Shipment Details Box
+    doc.rect(50, 220, 245, 120)
+       .fillAndStroke('#f9fafb', '#e5e7eb');
+
+    doc.fontSize(14)
+       .fillColor('#1f2937')
+       .text('📋 Shipment Details', 60, 235);
+
+    doc.fontSize(10)
+       .fillColor('#4b5563')
+       .text(`Shipment ID: ${shipment.shipmentId}`, 60, 255)
+       .text(`Date: ${new Date(shipment.shippedAt).toLocaleDateString()}`, 60, 270)
+       .text(`Time: ${new Date(shipment.shippedAt).toLocaleTimeString()}`, 60, 285)
+       .text(`Status: ${shipment.status.toUpperCase()}`, 60, 300)
+       .text(`Total Cartons: ${shipment.totalCartons}`, 60, 315);
+
+    // Distributor Details Box
+    doc.rect(300, 220, 245, 120)
+       .fillAndStroke('#f9fafb', '#e5e7eb');
+
+    doc.fontSize(14)
+       .fillColor('#1f2937')
+       .text('🏢 Distributor Information', 310, 235);
+
+    const distributor = shipment.distributorId;
+    doc.fontSize(10)
+       .fillColor('#4b5563')
+       .text(`Company: ${shipment.distributorName}`, 310, 255)
+       .text(`Contact: ${distributor?.phoneNo || 'N/A'}`, 310, 270)
+       .text(`Party: ${distributor?.distributorDetails?.partyName || 'N/A'}`, 310, 285)
+       .text(`Transport: ${distributor?.distributorDetails?.transport || 'N/A'}`, 310, 300);
+
+    // Items Table Header
+    doc.fontSize(16)
+       .fillColor('#1f2937')
+       .text('📦 Shipped Items', 50, 370);
+
+    // Table Header Background
+    doc.rect(50, 400, 495, 25)
+       .fillAndStroke('#2563eb', '#2563eb');
+
+    doc.fontSize(10)
+       .fillColor('white')
+       .text('#', 60, 410, { width: 30 })
+       .text('Article Name', 100, 410, { width: 140 })
+       .text('Colors', 250, 410, { width: 80 })
+       .text('Sizes', 340, 410, { width: 60 })
+       .text('Status', 410, 410, { width: 60 })
+       .text('Unique ID', 480, 410, { width: 65 });
+
+    // Table Rows
+    let yPosition = 430;
+    shipment.items.forEach((item, index) => {
+      // Alternate row colors
+      if (index % 2 === 0) {
+        doc.rect(50, yPosition - 5, 495, 20)
+           .fillAndStroke('#f9fafb', '#f9fafb');
+      }
+
+      doc.fillColor('#1f2937')
+         .text((index + 1).toString(), 60, yPosition, { width: 30 })
+         .text(item.articleName || 'Unknown', 100, yPosition, { width: 140 })
+         .text(Array.isArray(item.articleDetails?.colors) ? 
+               item.articleDetails.colors.join(', ') : 
+               item.articleDetails?.colors || 'N/A', 250, yPosition, { width: 80 })
+         .text(Array.isArray(item.articleDetails?.sizes) ? 
+               item.articleDetails.sizes.join(', ') : 
+               item.articleDetails?.sizes || 'N/A', 340, yPosition, { width: 60 })
+         .text('SHIPPED', 410, yPosition, { width: 60 })
+         .text(item.uniqueId.substring(0, 8) + '...', 480, yPosition, { width: 65 });
+
+      yPosition += 20;
+    });
+
+    // Summary Section
+    const summaryY = yPosition + 30;
+    doc.rect(50, summaryY, 495, 80)
+       .fillAndStroke('#f0f9ff', '#bae6fd');
+
+    doc.fontSize(14)
+       .fillColor('#1e40af')
+       .text('📊 Shipment Summary', 60, summaryY + 15);
+
+    doc.fontSize(10)
+       .fillColor('#1e40af')
+       .text(`Total Items: ${shipment.items.length}`, 60, summaryY + 35)
+       .text(`Total Cartons: ${shipment.totalCartons}`, 60, summaryY + 50)
+       .text(`Shipment Status: ${shipment.status.toUpperCase()}`, 300, summaryY + 35)
+       .text(`Generated: ${new Date().toLocaleDateString()}`, 300, summaryY + 50);
+
+    // Footer
+    const footerY = summaryY + 100;
+    doc.fontSize(10)
+       .fillColor('#6b7280')
+       .text('Contact: warehouse@company.com | +91 XXXXX XXXXX', 50, footerY, { align: 'center' })
+       .text('Warehouse Management System', 50, footerY + 15, { align: 'center' })
+       .text(`Receipt generated on ${new Date().toLocaleString()}`, 50, footerY + 35, { align: 'center' })
+       .text('This is a computer-generated document.', 50, footerY + 50, { align: 'center', style: 'italic' });
+
+    // Finalize the PDF
+    doc.end();
+
+  } catch (error) {
+    console.error('Error generating PDF receipt:', error);
+    
+    // If response headers haven't been sent yet, send JSON error
+    if (!res.headersSent) {
+      res.status(500).json({
+        result: false,
+        message: 'Failed to generate PDF receipt',
+        error: error.message
+      });
+    }
+  }
+};
+
+
+
+
+const generateQRWithLabel = async (qrString, labelData) => {
+  try {
+    // ✅ Generate base QR code with improved settings for scanning reliability
+    const qrCodeDataURL = await QRCodeLib.toDataURL(qrString, {
+      width: 320,           // ✅ Increased size for better scanning
+      margin: 4,            // ✅ CRITICAL: 4+ module quiet zone (was 2)
+      color: { 
+        dark: '#000000',    // Pure black
+        light: '#FFFFFF'    // Pure white
+      },
+      errorCorrectionLevel: 'Q'  // ✅ CRITICAL: Higher error correction (was 'M')
+    });
+
+    // ✅ Create canvas with proper proportions
+    const canvas = createCanvas(450, 650); // Slightly taller for better layout
+    const ctx = canvas.getContext('2d');
+
+    // White background
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, 450, 650);
+
+    // ✅ Add label information on top with proper spacing from QR quiet zone
+    ctx.fillStyle = '#000000';
+    ctx.font = 'bold 16px Arial';  // Slightly smaller for better fit
+    ctx.textAlign = 'center';
+
+    let yPos = 30;
+    ctx.fillText(`Article: ${labelData.articleName}`, 225, yPos);
+    yPos += 25;
+    ctx.fillText(`Colors: ${labelData.colors}`, 225, yPos);
+    yPos += 25;
+    ctx.fillText(`Sizes: ${labelData.sizes}`, 225, yPos);
+    yPos += 25;
+    ctx.fillText(`Carton No: ${labelData.cartonNo}`, 225, yPos);
+
+    // Add separator line with proper spacing from QR
+    yPos += 35;  // ✅ More space before QR code
+    ctx.strokeStyle = '#cccccc';  // Lighter line to avoid interfering with QR
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(75, yPos);
+    ctx.lineTo(375, yPos);
+    ctx.stroke();
+
+    // ✅ Position QR code with adequate spacing (respects quiet zone)
+    const qrImage = await loadImage(qrCodeDataURL);
+    const qrYPos = yPos + 40;  // ✅ Sufficient space from separator
+    
+    // ✅ Center QR code and ensure no overlap with labels
+    ctx.drawImage(qrImage, 65, qrYPos, 320, 320);  // Matches generated width
+
+    // ✅ Add scanning instructions below QR (outside quiet zone)
+    ctx.font = '12px Arial';
+    ctx.fillStyle = '#666666';
+    const instructionYPos = qrYPos + 340;
+    ctx.fillText('Scan to track carton through warehouse', 225, instructionYPos);
+    
+    // ✅ Add unique ID for manual reference
+    ctx.font = '10px monospace';
+    ctx.fillStyle = '#999999';
+    const uniqueIdText = `ID: ${qrString.includes('uniqueId') ? 
+      JSON.parse(qrString).uniqueId.substring(0, 8) + '...' : 
+      qrString.substring(0, 12)}`;
+    ctx.fillText(uniqueIdText, 225, instructionYPos + 20);
+
+    // Convert canvas to data URL
+    return canvas.toDataURL('image/png');
+
+  } catch (error) {
+    console.error('Error generating QR with label:', error);
+    
+    // ✅ Improved fallback with same critical settings
+    return await QRCodeLib.toDataURL(qrString, {
+      width: 320,
+      margin: 4,            // ✅ Keep 4+ module margin in fallback
+      color: { dark: '#000000', light: '#FFFFFF' },
+      errorCorrectionLevel: 'Q'  // ✅ Keep higher error correction
+    });
+  }
+};
+
+
+
+
+const generateReceiptPdf = async (req, res) => {
+  try {
+    const { qrCodes, articleInfo } = req.body;
+    const contractorInfo = req.user; // ✅ Get contractor info from authenticated user
+
+    console.log('PDF Generation Debug:');
+    console.log('qrCodes:', qrCodes?.length);
+    console.log('articleInfo:', articleInfo);
+    console.log('contractorInfo:', contractorInfo?.name, contractorInfo?.phoneNo);
+
+    
+
+    if (!qrCodes || qrCodes.length === 0) {
+      return res.status(400).json({
+        result: false,
+        message: 'No QR codes provided for receipt'
+      });
+    }
+
+    if (!articleInfo) {
+      return res.status(400).json({
+        result: false,
+        message: 'Article info is required'
+      });
+    }
+
+    // Create PDF document
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+
+    // Set response headers
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition', 
+      `attachment; filename=QR_Receipt_${articleInfo.savedAsArticleName.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.pdf`
+    );
+
+    // Pipe PDF to response
+    doc.pipe(res);
+
+    // ✅ Header
+    doc.fontSize(22).text('QR Code Generation Receipt', { align: 'center' });
+    doc.moveDown(1.5);
+
+    // ✅ Contractor Details Section (Fixed positioning)
+    const contractorBoxY = doc.y;
+    doc.rect(50, contractorBoxY, 500, 60).stroke();
+    doc.fontSize(16).text('Contractor Details', 60, contractorBoxY + 10);
+    doc.fontSize(12)
+       .text(`Name: ${contractorInfo.name || 'N/A'}`, 60, contractorBoxY + 30)
+       .text(`Phone No: ${contractorInfo.phoneNo || 'N/A'}`, 60, contractorBoxY + 45);
+    
+    // Move cursor after contractor box
+    doc.y = contractorBoxY + 70;
+    doc.moveDown(1);
+
+    // ✅ Article Details Section (Fixed positioning and data access)
+    const articleBoxY = doc.y;
+    doc.rect(50, articleBoxY, 500, 100).stroke();
+    doc.fontSize(16).text('Article Details', 60, articleBoxY + 10);
+    
+    // ✅ Fixed data access and size formatting
+    const articleName = articleInfo.savedAsArticleName || articleInfo.contractorInput || 'N/A';
+    const colors = Array.isArray(articleInfo.colors) ? articleInfo.colors.join(', ') : (articleInfo.colors || 'N/A');
+    
+    // ✅ Fixed size display (only first X last)
+    let sizesDisplay = 'N/A';
+    if (articleInfo.sizes && Array.isArray(articleInfo.sizes)) {
+      if (articleInfo.sizes.length === 1) {
+        sizesDisplay = articleInfo.sizes[0];
+      } else if (articleInfo.sizes.length > 1) {
+        sizesDisplay = `${articleInfo.sizes[0]}X${articleInfo.sizes[articleInfo.sizes.length - 1]}`;
+      }
+    }
+    
+    doc.fontSize(12)
+       .text(`Article Name: ${articleName}`, 60, articleBoxY + 30)
+       .text(`Colors: ${colors}`, 60, articleBoxY + 45)
+       .text(`Sizes: ${sizesDisplay}`, 60, articleBoxY + 60)
+       .text(`Number of Cartons: ${articleInfo.numberOfQRs || qrCodes.length}`, 60, articleBoxY + 75);
+
+    // Move cursor after article box
+    doc.y = articleBoxY + 110;
+    doc.moveDown(1);
+
+    // ✅ Generation Info
+    doc.fontSize(10)
+       .text(`Generated on: ${new Date().toLocaleString()}`, 50)
+       .text(`Batch ID: ${qrCodes[0]?.batchId || 'N/A'}`, 50);
+
+    doc.moveDown(2);
+
+    // ✅ Footer
+    doc.fontSize(10).text(
+      'This receipt confirms the generation of QR codes for the specified article batch.',
+      50,
+      doc.page.height - 100,
+      { 
+        align: 'center',
+        width: 500
+      }
+    );
+
+    // Finalize PDF
+    doc.end();
+
+  } catch (error) {
+    console.error('Error generating receipt PDF:', error);
+    res.status(500).json({
+      result: false,
+      message: 'Failed to generate receipt PDF',
+      error: error.message
+    });
+  }
+};
+
+const generateShipmentReceiptPDF = async (req, res) => {
+  try {
+    const { 
+      shipmentId, 
+      distributorName, 
+      totalCartons, 
+      shippedAt, 
+      items 
+    } = req.body;
+
+    // ✅ Create PDF document
+    const doc = new PDFDocument({ 
+      size: 'A4',
+      margin: 50 
+    });
+
+    // ✅ Set response headers for PDF download
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="Shipment_${shipmentId}_Receipt.pdf"`);
+
+    // ✅ Pipe PDF to response
+    doc.pipe(res);
+
+    // Header Section
+    doc.fontSize(24)
+       .fillColor('#2563eb')
+       .text('📦 SHIPMENT RECEIPT', 50, 50, { align: 'center' });
+
+    doc.fontSize(12)
+       .fillColor('#666666')
+       .text('Official Shipping Documentation', 50, 80, { align: 'center' });
+
+    // Draw header line
+    doc.strokeColor('#2563eb')
+       .lineWidth(3)
+       .moveTo(50, 100)
+       .lineTo(545, 100)
+       .stroke();
+
+    // Company Info Section
+    doc.fontSize(16)
+       .fillColor('#1f2937')
+       .text('Warehouse Management System', 50, 130);
+
+    doc.fontSize(10)
+       .fillColor('#666666')
+       .text('Address: Main Warehouse Facility', 50, 150)
+       .text('Phone: +91 XXXXX XXXXX', 50, 165)
+       .text('Email: warehouse@company.com', 50, 180);
+
+    // Shipment Details Box
+    doc.rect(50, 220, 245, 140)
+       .fillAndStroke('#f9fafb', '#e5e7eb');
+
+    doc.fontSize(14)
+       .fillColor('#1f2937')
+       .text('📋 Shipment Details', 60, 235);
+
+    doc.fontSize(10)
+       .fillColor('#4b5563')
+       .text(`Shipment ID: ${shipmentId}`, 60, 255)
+       .text(`Date: ${new Date(shippedAt).toLocaleDateString()}`, 60, 270)
+       .text(`Time: ${new Date(shippedAt).toLocaleTimeString()}`, 60, 285)
+       .text(`Status: SHIPPED`, 60, 300)
+       .text(`Total Cartons: ${totalCartons}`, 60, 315)
+       .text(`Shipped By: ${req.user?.name || 'Shipment Manager'}`, 60, 330);
+
+    // Distributor Details Box
+    doc.rect(300, 220, 245, 140)
+       .fillAndStroke('#f9fafb', '#e5e7eb');
+
+    doc.fontSize(14)
+       .fillColor('#1f2937')
+       .text('🏢 Distributor Information', 310, 235);
+
+    doc.fontSize(10)
+       .fillColor('#4b5563')
+       .text(`Company: ${distributorName}`, 310, 255)
+       .text('Contact: +91 XXXXX XXXXX', 310, 270)
+       .text('Email: distributor@email.com', 310, 285)
+       .text('Address: Distributor Address', 310, 300)
+       .text('Transport: Road Transport', 310, 315)
+       .text('City: Mumbai', 310, 330);
+
+    // Items Table Header
+    doc.fontSize(16)
+       .fillColor('#1f2937')
+       .text('📦 Shipped Items', 50, 390);
+
+    // Table Header Background
+    doc.rect(50, 420, 495, 25)
+       .fillAndStroke('#2563eb', '#2563eb');
+
+    doc.fontSize(10)
+       .fillColor('white')
+       .text('#', 60, 430, { width: 30 })
+       .text('Article Name', 100, 430, { width: 140 })
+       .text('Colors', 250, 430, { width: 80 })
+       .text('Sizes', 340, 430, { width: 60 })
+       .text('Carton #', 410, 430, { width: 60 })
+       .text('Status', 480, 430, { width: 65 });
+
+    // Table Rows
+    let yPosition = 450;
+    const maxItemsPerPage = 15;
+    
+    items.slice(0, maxItemsPerPage).forEach((item, index) => {
+      // Alternate row colors
+      if (index % 2 === 0) {
+        doc.rect(50, yPosition - 5, 495, 20)
+           .fillAndStroke('#f9fafb', '#f9fafb');
+      }
+
+      doc.fillColor('#1f2937')
+         .text((index + 1).toString(), 60, yPosition, { width: 30 })
+         .text(item.articleName || 'Unknown', 100, yPosition, { width: 140 })
+         .text(Array.isArray(item.colors) ? 
+               item.colors.join(', ') : 
+               item.colors || 'N/A', 250, yPosition, { width: 80 })
+         .text(Array.isArray(item.sizes) ? 
+               item.sizes.join(', ') : 
+               item.sizes || 'N/A', 340, yPosition, { width: 60 })
+         .text(`#${item.cartonNumber || index + 1}`, 410, yPosition, { width: 60 })
+         .text('SHIPPED', 480, yPosition, { width: 65 });
+
+      yPosition += 20;
+    });
+
+    // Add overflow indicator if there are more items
+    if (items.length > maxItemsPerPage) {
+      doc.fontSize(10)
+         .fillColor('#6b7280')
+         .text(`... and ${items.length - maxItemsPerPage} more items`, 60, yPosition + 10, { style: 'italic' });
+      yPosition += 30;
+    }
+
+    // Summary Section
+    const summaryY = yPosition + 30;
+    doc.rect(50, summaryY, 495, 100)
+       .fillAndStroke('#f0f9ff', '#bae6fd');
+
+    doc.fontSize(14)
+       .fillColor('#1e40af')
+       .text('📊 Shipment Summary', 60, summaryY + 15);
+
+    const uniqueArticles = [...new Set(items.map(item => item.articleName))].filter(Boolean);
+    const estimatedWeight = totalCartons * 2; // 2kg per carton estimate
+
+    doc.fontSize(10)
+       .fillColor('#1e40af')
+       .text(`Total Items Shipped: ${items.length} Items`, 60, summaryY + 35)
+       .text(`Total Cartons: ${totalCartons}`, 60, summaryY + 50)
+       .text(`Unique Articles: ${uniqueArticles.length}`, 60, summaryY + 65)
+       .text(`Estimated Weight: ${estimatedWeight} kg`, 300, summaryY + 35)
+       .text(`Shipment Status: SHIPPED`, 300, summaryY + 50)
+       .text(`Generated: ${new Date().toLocaleDateString()}`, 300, summaryY + 65);
+
+    // Footer
+    const footerY = summaryY + 120;
+    doc.fontSize(10)
+       .fillColor('#6b7280')
+       .text('Contact Information: warehouse@company.com | +91 XXXXX XXXXX', 50, footerY, { align: 'center' })
+       .text('Warehouse Management System', 50, footerY + 15, { align: 'center' })
+       .text(`Receipt generated on ${new Date().toLocaleString()}`, 50, footerY + 35, { align: 'center' })
+       .text('This is a computer-generated document and does not require a signature.', 50, footerY + 50, { align: 'center', style: 'italic' });
+
+    // Add QR tracking info footer
+    doc.fontSize(8)
+       .fillColor('#9ca3af')
+       .text(`Tracking: Use shipment ID ${shipmentId} for status updates`, 50, footerY + 70, { align: 'center' });
+
+    // ✅ Finalize the PDF
+    doc.end();
+
+  } catch (error) {
+    console.error('Error generating PDF receipt:', error);
+    
+    // If response headers haven't been sent yet, send JSON error
+    if (!res.headersSent) {
+      res.status(500).json({
+        result: false,
+        message: 'Failed to generate PDF receipt',
+        error: error.message
+      });
+    } else {
+      // If we're already streaming PDF, we can't send JSON
+      console.error('PDF generation failed mid-stream:', error.message);
+    }
   }
 };
 
 const getSingleProductInventory = async (req, res) => {
   try {
     const { productId } = req.params;
-    const { search = '', startDate, endDate, sort = 'dateDesc' } = req.query;
+    const { search = '', startDate, endDate, sort = 'dateDesc', status } = req.query;
     
     if (!productId) {
       return res.status(400).json({
@@ -1256,11 +1791,11 @@ const getSingleProductInventory = async (req, res) => {
       });
     }
 
-    // Get inventory with detailed QR code information
+    // Get inventory with detailed QR information
     const inventory = await Inventory.findOne({ productId })
       .populate({
         path: 'items.qrCodeId',
-        select: 'uniqueId status totalScans scans createdAt batchId',
+        select: 'uniqueId status totalScans scans createdAt batchId contractorInput',
         populate: {
           path: 'batchId',
           select: 'batchId articleName generatedBy createdAt'
@@ -1268,7 +1803,7 @@ const getSingleProductInventory = async (req, res) => {
       })
       .lean();
 
-    // Get full product data
+    // Get product data
     const product = await Product.findById(productId).lean();
     
     if (!product) {
@@ -1278,123 +1813,104 @@ const getSingleProductInventory = async (req, res) => {
       });
     }
 
-    // Apply filters to inventory items
     let items = inventory?.items || [];
     
-    // ✅ Apply search filter
+    // Apply filters
     if (search) {
       const searchLower = search.toLowerCase();
       items = items.filter(item => 
         item.articleName?.toLowerCase().includes(searchLower) ||
         item.uniqueId?.toLowerCase().includes(searchLower) ||
-        item.qrCodeDetails?.uniqueId?.toLowerCase().includes(searchLower)
+        item.qrCodeId?.uniqueId?.toLowerCase().includes(searchLower)
       );
     }
 
-    // ✅ Apply date range filter
+    if (status) {
+      items = items.filter(item => item.status === status);
+    }
+
     if (startDate || endDate) {
       items = items.filter(item => {
-        const itemDate = item.createdAt || item.manufacturedAt;
+        const itemDate = item.manufacturedAt || item.createdAt;
         if (!itemDate) return true;
         
         const date = new Date(itemDate);
         const start = startDate ? new Date(startDate) : null;
         const end = endDate ? new Date(endDate) : null;
         
-        const afterStart = start ? date >= start : true;
-        const beforeEnd = end ? date <= end : true;
-        
-        return afterStart && beforeEnd;
+        return (!start || date >= start) && (!end || date <= end);
       });
     }
 
-    // ✅ Apply sorting
-    if (sort) {
-      items.sort((a, b) => {
-        const dateA = new Date(a.createdAt || a.manufacturedAt);
-        const dateB = new Date(b.createdAt || b.manufacturedAt);
-        
-        switch (sort) {
-          case 'dateAsc':
-            return dateA - dateB;
-          case 'dateDesc':
-            return dateB - dateA;
-          case 'timeAsc':
-            return dateA - dateB;
-          case 'timeDesc':
-            return dateB - dateA;
-          default:
-            return dateB - dateA;
-        }
-      });
-    }
+    // Apply sorting
+    items.sort((a, b) => {
+      const dateA = new Date(a.createdAt || a.manufacturedAt);
+      const dateB = new Date(b.createdAt || b.manufacturedAt);
+      
+      if (sort === 'dateAsc' || sort === 'timeAsc') return dateA - dateB;
+      return dateB - dateA;
+    });
 
-    // Enhanced items processing with QR details
+    // Group by article and calculate statistics
     const itemsByArticle = {};
-    const qrStatsByArticle = {};
-    const articleStatsByStatus = {}; // ✅ Current status counts per article
+    const statsByArticle = {};
+    const statusBreakdown = {};
     
     items.forEach(item => {
       const articleName = item.articleName;
       
-      // Group items by article
+      // Group items
       if (!itemsByArticle[articleName]) {
         itemsByArticle[articleName] = [];
-        qrStatsByArticle[articleName] = {
-          totalQRs: 0,
-          scannedQRs: 0,
+        statsByArticle[articleName] = {
+          totalItems: 0,
+          scannedItems: 0,
           totalScans: 0,
-          lastScanned: null
+          lastActivity: null
         };
-        // ✅ Initialize with current status counts (not cumulative)
-        articleStatsByStatus[articleName] = {
+        statusBreakdown[articleName] = {
+          generated: 0,
           manufactured: 0,
-          in_warehouse: 0,
-          shipped_to_distributor: 0,
-          delivered: 0,
-          damaged: 0,
-          returned: 0
+          received: 0,
+          shipped: 0
         };
       }
 
-      // Enhanced item data with QR details
-      const itemWithQRDetails = {
+      // Enhanced item data
+      const enhancedItem = {
         ...item,
-        qrCodeDetails: item.qrCodeId ? {
+        qrDetails: item.qrCodeId ? {
           uniqueId: item.qrCodeId.uniqueId,
           status: item.qrCodeId.status,
           totalScans: item.qrCodeId.totalScans,
           createdAt: item.qrCodeId.createdAt,
-          lastScannedAt: item.qrCodeId.scans?.length > 0 
+          contractorInput: item.qrCodeId.contractorInput,
+          lastScanned: item.qrCodeId.scans?.length > 0 
             ? item.qrCodeId.scans[item.qrCodeId.scans.length - 1].scannedAt 
             : null,
-          batchInfo: item.qrCodeId.batchId,
           scanHistory: item.qrCodeId.scans || []
         } : null
       };
       
-      itemsByArticle[articleName].push(itemWithQRDetails);
+      itemsByArticle[articleName].push(enhancedItem);
       
-      // ✅ Count current status only
-      if (articleStatsByStatus[articleName].hasOwnProperty(item.status)) {
-        articleStatsByStatus[articleName][item.status]++;
+      // Update statistics
+      statsByArticle[articleName].totalItems++;
+      if (item.qrCodeId?.totalScans > 0) {
+        statsByArticle[articleName].scannedItems++;
+        statsByArticle[articleName].totalScans += item.qrCodeId.totalScans;
       }
       
-      // Update QR statistics for this article
-      if (item.qrCodeId) {
-        qrStatsByArticle[articleName].totalQRs++;
-        qrStatsByArticle[articleName].totalScans += item.qrCodeId.totalScans || 0;
-        
-        if (item.qrCodeId.totalScans > 0) {
-          qrStatsByArticle[articleName].scannedQRs++;
-        }
-        
-        // Track last scanned date
-        const lastScanned = itemWithQRDetails.qrCodeDetails?.lastScannedAt;
-        if (lastScanned && (!qrStatsByArticle[articleName].lastScanned || 
-            new Date(lastScanned) > new Date(qrStatsByArticle[articleName].lastScanned))) {
-          qrStatsByArticle[articleName].lastScanned = lastScanned;
-        }
+      // Status breakdown
+      if (statusBreakdown[articleName][item.status] !== undefined) {
+        statusBreakdown[articleName][item.status]++;
+      }
+      
+      // Last activity
+      const lastActivity = enhancedItem.qrDetails?.lastScanned;
+      if (lastActivity && (!statsByArticle[articleName].lastActivity || 
+          new Date(lastActivity) > new Date(statsByArticle[articleName].lastActivity))) {
+        statsByArticle[articleName].lastActivity = lastActivity;
       }
     });
 
@@ -1402,24 +1918,32 @@ const getSingleProductInventory = async (req, res) => {
       result: true,
       message: 'Product inventory data retrieved successfully',
       data: {
-        inventoryCount: inventory ? inventory.totalQuantity : 0,
-        availableQuantity: inventory ? inventory.availableQuantity : 0,
-        reservedQuantity: inventory ? inventory.reservedQuantity || 0 : 0,
-        // ✅ Include cumulative counts from inventory schema for overall stats
-        quantityByStage: inventory ? inventory.quantityByStage : {
+        // Summary statistics
+        inventoryCount: inventory?.totalQuantity || 0,
+        availableQuantity: inventory?.availableQuantity || 0,
+        quantityByStage: inventory?.quantityByStage || {
+          generated: 0,
           manufactured: 0,
-          in_warehouse: 0,
-          shipped_to_distributor: 0
+          received: 0,
+          shipped: 0
         },
-        inventoryItems: items, // ✅ Return filtered and sorted items
+        
+        // Filtered and sorted items
+        inventoryItems: items,
+        
+        // Grouped data for frontend display
         itemsByArticle,
-        qrStatsByArticle,
-        articleStatsByStatus, // ✅ Current status counts per article
-        product: product,
-        lastUpdated: inventory ? inventory.lastUpdated : null,
-        // ✅ Add filter metadata
-        filters: {
+        statsByArticle,
+        statusBreakdown,
+        
+        // Product information
+        product,
+        lastUpdated: inventory?.lastUpdated || null,
+        
+        // Filter metadata
+        appliedFilters: {
           search,
+          status,
           startDate,
           endDate,
           sort,
@@ -1428,6 +1952,7 @@ const getSingleProductInventory = async (req, res) => {
         }
       }
     });
+
   } catch (error) {
     console.error('Error fetching single product inventory:', error);
     res.status(500).json({
@@ -1438,23 +1963,23 @@ const getSingleProductInventory = async (req, res) => {
   }
 };
 
-
-
 const getAllInventory = async (req, res) => {
   try {
-    // Get all inventory records with populated product and QR data
+    const { limit = 50, offset = 0, sortBy = 'lastUpdated' } = req.query;
+
+    // Get all inventory records with product and QR data
     const inventories = await Inventory.find({})
-      .populate('productId', 'segment title category brand')
+      .populate('productId', 'segment variants')
       .populate({
         path: 'items.qrCodeId',
-        select: 'status totalScans batchId',
-        populate: {
-          path: 'batchId',
-          select: 'articleName'
-        }
+        select: 'status totalScans batchId createdAt'
       })
+      .sort({ [sortBy]: -1 })
+      .limit(parseInt(limit))
+      .skip(parseInt(offset))
       .lean();
 
+    // Transform data for frontend consumption
     const inventoryData = inventories.map(inventory => {
       // Calculate QR statistics
       const qrStats = inventory.items.reduce((acc, item) => {
@@ -1468,47 +1993,80 @@ const getAllInventory = async (req, res) => {
         return acc;
       }, { totalQRs: 0, totalScans: 0, scannedQRs: 0 });
 
+      // Status breakdown
+      const statusBreakdown = inventory.items.reduce((acc, item) => {
+        acc[item.status] = (acc[item.status] || 0) + 1;
+        return acc;
+      }, {});
+
+      // Article breakdown
+      const articleBreakdown = inventory.items.reduce((acc, item) => {
+        const key = item.articleName;
+        if (!acc[key]) {
+          acc[key] = { 
+            count: 0, 
+            qrsGenerated: 0, 
+            qrsScanned: 0,
+            lastActivity: null
+          };
+        }
+        acc[key].count++;
+        if (item.qrCodeId) {
+          acc[key].qrsGenerated++;
+          if (item.qrCodeId.totalScans > 0) {
+            acc[key].qrsScanned++;
+          }
+          // Track last activity
+          if (item.qrCodeId.createdAt && (!acc[key].lastActivity || 
+              new Date(item.qrCodeId.createdAt) > new Date(acc[key].lastActivity))) {
+            acc[key].lastActivity = item.qrCodeId.createdAt;
+          }
+        }
+        return acc;
+      }, {});
+
       return {
         productId: inventory.productId._id,
-        product: inventory.productId,
-        inventoryCount: inventory.totalQuantity,
-        availableQuantity: inventory.availableQuantity,
-        reservedQuantity: inventory.reservedQuantity || 0,
-        totalItems: inventory.items.length,
-        lastUpdated: inventory.lastUpdated,
-        
-        // Enhanced QR statistics
+        productInfo: {
+          segment: inventory.productId.segment,
+          totalVariants: inventory.productId.variants?.length || 0,
+          totalArticles: inventory.productId.variants?.reduce((sum, variant) => 
+            sum + (variant.articles?.length || 0), 0) || 0
+        },
+        inventoryMetrics: {
+          totalQuantity: inventory.totalQuantity,
+          availableQuantity: inventory.availableQuantity,
+          quantityByStage: inventory.quantityByStage
+        },
         qrCodeStats: qrStats,
-        
-        // Status breakdown
-        statusBreakdown: inventory.items.reduce((acc, item) => {
-          acc[item.status] = (acc[item.status] || 0) + 1;
-          return acc;
-        }, {}),
-        
-        // Article breakdown with QR info
-        articleBreakdown: inventory.items.reduce((acc, item) => {
-          const key = item.articleName;
-          if (!acc[key]) {
-            acc[key] = { count: 0, qrsGenerated: 0, qrsScanned: 0 };
-          }
-          acc[key].count++;
-          if (item.qrCodeId) {
-            acc[key].qrsGenerated++;
-            if (item.qrCodeId.totalScans > 0) {
-              acc[key].qrsScanned++;
-            }
-          }
-          return acc;
-        }, {})
+        statusBreakdown,
+        articleBreakdown,
+        lastUpdated: inventory.lastUpdated
       };
     });
+
+    // Calculate overall statistics
+    const overallStats = inventoryData.reduce((acc, data) => ({
+      totalProducts: acc.totalProducts + 1,
+      totalItems: acc.totalItems + data.inventoryMetrics.totalQuantity,
+      totalQRs: acc.totalQRs + data.qrCodeStats.totalQRs,
+      totalScans: acc.totalScans + data.qrCodeStats.totalScans
+    }), { totalProducts: 0, totalItems: 0, totalQRs: 0, totalScans: 0 });
 
     return res.status(200).json({
       result: true,
       message: 'All inventory data retrieved successfully',
-      data: inventoryData
+      data: {
+        overallStats,
+        inventoryData,
+        pagination: {
+          limit: parseInt(limit),
+          offset: parseInt(offset),
+          hasMore: inventoryData.length === parseInt(limit)
+        }
+      }
     });
+
   } catch (error) {
     console.error('Error fetching all inventory data:', error);
     res.status(500).json({
@@ -1521,23 +2079,48 @@ const getAllInventory = async (req, res) => {
 
 const getQRStatistics = async (req, res) => {
   try {
-    const { sortBy = 'latest' } = req.query; // Add sort parameter
+    const { 
+      sortBy = 'latest', 
+      dateRange = '30d',
+      articleFilter,
+      statusFilter 
+    } = req.query;
+
+    // Build match query
+    const matchQuery = {};
     
-    // Get QR code statistics by article - directly from QRCode collection
+    // Date range filter
+    if (dateRange && dateRange !== 'all') {
+      const days = parseInt(dateRange.replace('d', ''));
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - days);
+      matchQuery.createdAt = { $gte: startDate };
+    }
+
+    if (articleFilter) {
+      matchQuery.articleName = { $regex: articleFilter, $options: 'i' };
+    }
+
+    if (statusFilter) {
+      matchQuery.status = statusFilter;
+    }
+
+    // QR statistics by article
     const qrStatsByArticle = await QRCode.aggregate([
-      { $match: {} }, // Remove all filters for default view
+      { $match: matchQuery },
       {
         $group: {
           _id: {
             articleName: '$articleName',
-            productId: '$productId'
+            productId: '$productId',
+            variantName: '$variantName'
           },
           totalQRsGenerated: { $sum: 1 },
           totalScans: { $sum: '$totalScans' },
           scannedQRs: {
             $sum: { $cond: [{ $gt: ['$totalScans', 0] }, 1, 0] }
           },
-          activeQRs: {
+          generatedQRs: {
             $sum: { $cond: [{ $eq: ['$status', 'generated'] }, 1, 0] }
           },
           manufacturedQRs: {
@@ -1565,38 +2148,36 @@ const getQRStatistics = async (req, res) => {
       },
       { $unwind: { path: '$product', preserveNullAndEmptyArrays: true } },
       {
-        $project: {
+        $addFields: {
           articleName: '$_id.articleName',
           productId: '$_id.productId',
-          productTitle: { $ifNull: ['$product.segment', 'Unknown Product'] },
-          totalQRsGenerated: 1,
-          totalScans: 1,
-          scannedQRs: 1,
-          activeQRs: 1,
-          manufacturedQRs: 1,
-          receivedQRs: 1,
-          shippedQRs: 1,
+          variantName: '$_id.variantName',
+          productSegment: '$product.segment',
           unusedQRs: { $subtract: ['$totalQRsGenerated', '$scannedQRs'] },
           scanRate: {
             $cond: [
               { $gt: ['$totalQRsGenerated', 0] },
-              { $multiply: [{ $divide: ['$scannedQRs', '$totalQRsGenerated'] }, 100] },
+              { 
+                $round: [
+                  { $multiply: [{ $divide: ['$scannedQRs', '$totalQRsGenerated'] }, 100] },
+                  2
+                ]
+              },
               0
             ]
           },
-          firstGenerated: 1,
-          lastGenerated: 1,
-          avgScansPerQR: { $round: ['$avgScansPerQR', 2] },
-          totalBatches: { $size: '$uniqueBatches' }
+          totalBatches: { $size: '$uniqueBatches' },
+          avgScansPerQR: { $round: ['$avgScansPerQR', 2] }
         }
       },
-      // Dynamic sorting based on frontend selection
-      { $sort: sortBy === 'oldest' ? { lastGenerated: 1 } : { lastGenerated: -1 } }
+      {
+        $sort: sortBy === 'oldest' ? { lastGenerated: 1 } : { lastGenerated: -1 }
+      }
     ]);
 
-    // Get recent QR activity grouped by batch and article - Fixed to show segment and date
+    // Recent activity (batches created)
     const recentActivity = await QRCode.aggregate([
-      { $match: {} },
+      { $match: matchQuery },
       {
         $group: {
           _id: {
@@ -1605,8 +2186,9 @@ const getQRStatistics = async (req, res) => {
             productId: '$productId'
           },
           qrCount: { $sum: 1 },
-          lastCreated: { $max: '$createdAt' },
-          totalScans: { $sum: '$totalScans' }
+          createdAt: { $max: '$createdAt' },
+          totalScans: { $sum: '$totalScans' },
+          status: { $first: '$status' }
         }
       },
       {
@@ -1614,49 +2196,45 @@ const getQRStatistics = async (req, res) => {
           from: 'products',
           localField: '_id.productId',
           foreignField: '_id',
-          as: 'productInfo'
+          as: 'product'
         }
       },
-      { $unwind: { path: '$productInfo', preserveNullAndEmptyArrays: true } },
+      { $unwind: { path: '$product', preserveNullAndEmptyArrays: true } },
       {
-        $project: {
+        $addFields: {
           batchId: '$_id.batchId',
           articleName: '$_id.articleName',
-          productId: '$_id.productId',
-          productSegment: '$productInfo.segment', // Fixed: Use segment instead of title
-          productTitle: '$productInfo.segment',   // Keep both for compatibility
-          qrCount: 1,
-          lastCreated: 1,
-          totalScans: 1,
-          createdAt: '$lastCreated' // Add this for frontend compatibility
+          productSegment: '$product.segment'
         }
       },
-      { $sort: { lastCreated: -1 } },
-      { $limit: 10 }
+      { $sort: { createdAt: -1 } },
+      { $limit: 20 }
     ]);
 
-    // Calculate overall statistics
+    // Overall statistics
     const overallStats = qrStatsByArticle.reduce((acc, stat) => ({
       totalArticles: acc.totalArticles + 1,
-      totalQRsGenerated: acc.totalQRsGenerated + (stat.totalQRsGenerated || 0),
-      totalScans: acc.totalScans + (stat.totalScans || 0),
-      totalScannedQRs: acc.totalScannedQRs + (stat.scannedQRs || 0),
-      totalActiveQRs: acc.totalActiveQRs + (stat.activeQRs || 0),
-      totalManufacturedQRs: acc.totalManufacturedQRs + (stat.manufacturedQRs || 0),
-      totalReceivedQRs: acc.totalReceivedQRs + (stat.receivedQRs || 0),
-      totalShippedQRs: acc.totalShippedQRs + (stat.shippedQRs || 0)
+      totalQRsGenerated: acc.totalQRsGenerated + stat.totalQRsGenerated,
+      totalScans: acc.totalScans + stat.totalScans,
+      totalScannedQRs: acc.totalScannedQRs + stat.scannedQRs,
+      totalGeneratedQRs: acc.totalGeneratedQRs + stat.generatedQRs,
+      totalManufacturedQRs: acc.totalManufacturedQRs + stat.manufacturedQRs,
+      totalReceivedQRs: acc.totalReceivedQRs + stat.receivedQRs,
+      totalShippedQRs: acc.totalShippedQRs + stat.shippedQRs,
+      totalBatches: acc.totalBatches + stat.totalBatches
     }), {
       totalArticles: 0,
       totalQRsGenerated: 0,
       totalScans: 0,
       totalScannedQRs: 0,
-      totalActiveQRs: 0,
+      totalGeneratedQRs: 0,
       totalManufacturedQRs: 0,
       totalReceivedQRs: 0,
-      totalShippedQRs: 0
+      totalShippedQRs: 0,
+      totalBatches: 0
     });
 
-    // Add calculated fields to overall stats
+    // Add calculated fields
     overallStats.avgScansPerQR = overallStats.totalQRsGenerated > 0 
       ? Math.round((overallStats.totalScans / overallStats.totalQRsGenerated) * 100) / 100 
       : 0;
@@ -1664,34 +2242,750 @@ const getQRStatistics = async (req, res) => {
       ? Math.round((overallStats.totalScannedQRs / overallStats.totalQRsGenerated) * 100 * 100) / 100 
       : 0;
 
-    console.log('QR Statistics Response:', {
-      overview: overallStats,
-      statsByArticle: qrStatsByArticle.length,
-      recentActivity: recentActivity.length
-    });
-
     res.status(200).json({
       result: true,
       message: 'QR statistics retrieved successfully',
       data: {
         overview: overallStats,
         statsByArticle: qrStatsByArticle,
-        recentBatches: recentActivity,
-        sortBy: sortBy
+        recentActivity,
+        appliedFilters: {
+          sortBy,
+          dateRange,
+          articleFilter,
+          statusFilter
+        }
       }
     });
+
   } catch (error) {
     console.error('Error getting QR statistics:', error);
     res.status(500).json({
       result: false,
-      message: "Failed to retrieve QR statistics",
+      message: 'Failed to retrieve QR statistics',
       error: error.message
     });
   }
 };
 
 
+// ✅ FIXED: addContractor - Let schema handle password hashing
+const addContractor = async (req, res) => {
+  try {
+
+    console.log(req?.body);
+    
+    const { fullName, phoneNo, password } = req.body;
+
+    if (!fullName || !phoneNo || !password) {
+      return res.status(statusCodes.badRequest).json({
+        result: false,
+        message: "Full name, phone number, and password are required"
+      });
+    }
+
+    const cleanPhoneNo = String(phoneNo).trim();
+
+    const existingUser = await userModel.findOne({ phoneNo: cleanPhoneNo });
+    if (existingUser) {
+      return res.status(statusCodes.conflict).json({
+        result: false,
+        message: "Phone number already registered"
+      });
+    }
+
+    // ✅ REMOVED manual hashing - let schema handle it
+    const newContractor = new userModel({
+      name: fullName,
+      phoneNo: cleanPhoneNo,
+      password: password,  // ✅ Plain text - schema will hash it
+      role: 'contractor',
+      isActive: true,
+      contractorDetails: {
+        fullName,
+        phoneNo: cleanPhoneNo,
+        password: password,  // ✅ Plain text here too
+        totalItemsProduced: 0,
+        activeProductions: []
+      },
+      createdBy: req.user?._id
+    });
+
+    await newContractor.save(); // Schema pre("save") will hash the password
+
+    const contractorResponse = {
+      _id: newContractor._id,
+      name: newContractor.name,
+      phoneNo: newContractor.phoneNo,
+      role: newContractor.role,
+      fullName: newContractor.contractorDetails.fullName,
+      isActive: newContractor.isActive,
+      createdAt: newContractor.createdAt
+    };
+
+    res.status(statusCodes.success).json({
+      result: true,
+      message: "Contractor added successfully",
+      data: contractorResponse
+    });
+
+  } catch (error) {
+    console.error('Error adding contractor:', error);
+    res.status(statusCodes.serverError).json({
+      result: false,
+      message: "Failed to add contractor",
+      error: error.message
+    });
+  }
+};
+
+// ✅ FIXED: addWarehouseManager 
+const addWarehouseManager = async (req, res) => {
+  try {
+    const { fullName, phoneNo, password } = req.body;
+
+    if (!fullName || !phoneNo || !password) {
+      return res.status(statusCodes.badRequest).json({
+        result: false,
+        message: "Full name, phone number, and password are required"
+      });
+    }
+
+    const cleanPhoneNo = String(phoneNo).trim();
+
+    const existingUser = await userModel.findOne({ phoneNo: cleanPhoneNo });
+    if (existingUser) {
+      return res.status(statusCodes.conflict).json({
+        result: false,
+        message: "Phone number already registered"
+      });
+    }
+
+    // ✅ REMOVED manual hashing
+    const newWarehouseManager = new userModel({
+      name: fullName,
+      phoneNo: cleanPhoneNo,
+      password: password,  // ✅ Plain text
+      role: 'warehouse_inspector',
+      isActive: true,
+      warehouseInspectorDetails: {
+        fullName,
+        phoneNo: cleanPhoneNo,
+        password: password,  // ✅ Plain text
+        totalItemsInspected: 0,
+        itemsProcessedToday: 0
+      },
+      createdBy: req.user?._id
+    });
+
+    await newWarehouseManager.save();
+
+    const warehouseManagerResponse = {
+      _id: newWarehouseManager._id,
+      name: newWarehouseManager.name,
+      phoneNo: newWarehouseManager.phoneNo,
+      role: newWarehouseManager.role,
+      fullName: newWarehouseManager.warehouseInspectorDetails.fullName,
+      isActive: newWarehouseManager.isActive,
+      createdAt: newWarehouseManager.createdAt
+    };
+
+    res.status(statusCodes.success).json({
+      result: true,
+      message: "Warehouse manager added successfully",
+      data: warehouseManagerResponse
+    });
+
+  } catch (error) {
+    console.error('Error adding warehouse manager:', error);
+    res.status(statusCodes.serverError).json({
+      result: false,
+      message: "Failed to add warehouse manager",
+      error: error.message
+    });
+  }
+};
+
+// ✅ FIXED: addShipmentManager
+const addShipmentManager = async (req, res) => {
+  try {
+    const { fullName, phoneNo, password } = req.body;
+
+    if (!fullName || !phoneNo || !password) {
+      return res.status(statusCodes.badRequest).json({
+        result: false,
+        message: "Full name, phone number, and password are required"
+      });
+    }
+
+    const cleanPhoneNo = String(phoneNo).trim();
+
+    const existingUser = await userModel.findOne({ phoneNo: cleanPhoneNo });
+    if (existingUser) {
+      return res.status(statusCodes.conflict).json({
+        result: false,
+        message: "Phone number already registered"
+      });
+    }
+
+    // ✅ REMOVED manual hashing
+    const newShipmentManager = new userModel({
+      name: fullName,
+      phoneNo: cleanPhoneNo,
+      password: password,  // ✅ Plain text
+      role: 'shipment_manager',
+      isActive: true,
+      shipmentManagerDetails: {
+        fullName,
+        phoneNo: cleanPhoneNo,
+        password: password,  // ✅ Plain text
+        totalShipmentsHandled: 0,
+        activeShipments: []
+      },
+      createdBy: req.user?._id
+    });
+
+    await newShipmentManager.save();
+
+    const shipmentManagerResponse = {
+      _id: newShipmentManager._id,
+      name: newShipmentManager.name,
+      phoneNo: newShipmentManager.phoneNo,
+      role: newShipmentManager.role,
+      fullName: newShipmentManager.shipmentManagerDetails.fullName,
+      isActive: newShipmentManager.isActive,
+      createdAt: newShipmentManager.createdAt
+    };
+
+    res.status(statusCodes.success).json({
+      result: true,
+      message: "Shipment manager added successfully",
+      data: shipmentManagerResponse
+    });
+
+  } catch (error) {
+    console.error('Error adding shipment manager:', error);
+    res.status(statusCodes.serverError).json({
+      result: false,
+      message: "Failed to add shipment manager",
+      error: error.message
+    });
+  }
+};
+
+// ✅ FIXED: addDistributor
+const addDistributor = async (req, res) => {
+    try {
+        let { billNo, partyName, transport, phoneNo, password } = req.body;
+
+        let numBillNo = Number(billNo);
+        partyName = partyName ? partyName.trim() : "";
+        transport = transport ? transport.trim() : "";
+        password = password ? password.trim() : "";
+
+        let checkData = distributorValidationSchema.safeParse({
+            billNo: numBillNo, 
+            partyName, 
+            transport, 
+            phoneNo, 
+            password
+        });
+
+        if (!checkData.success) {
+            return res.status(statusCodes.badRequest).json({
+                result: false, 
+                message: checkData.error.errors[0].message, 
+                error: checkData.error
+            });
+        }
+
+        let alreadyInDb = await userModel.findOne({ phoneNo });
+
+        if (alreadyInDb) {
+            return res.status(statusCodes.conflict).json({
+                result: false, 
+                message: "Phone number already registered"
+            });
+        }
+
+        // ✅ REMOVED manual hashing
+        await userModel.create({
+            name: partyName,
+            phoneNo,
+            password: password,  // ✅ Plain text - schema will hash it
+            role: "distributor",
+            isActive: true,
+            distributorDetails: {
+                billNo: numBillNo,
+                partyName,
+                transport,
+                purchases: [],
+                receivedShipments: []
+            },
+            createdBy: req.user?._id || null
+        });
+
+        return res.status(statusCodes.success).json({
+            result: true, 
+            message: "Distributor Created Successfully"
+        });
+
+    } catch (error) {
+        console.error('Error adding distributor:', error);
+        return res.status(statusCodes.serverError).json({
+            result: false, 
+            message: "Error in Adding Distributor. Please Try Again Later",
+            error: error.message
+        });
+    }
+};
+
+// Add this function to your backend
+const createOrUpdateShipment = async (qrCode, user, distributorDetails) => {
+  try {
+
+    
+    const shipmentId = `SHIP_${Date.now()}_${distributorDetails.distributorId.slice(-6)}`;
+
+    // ✅ Create new item for shipment
+    const newItem = {
+      qrCodeId: qrCode._id,
+      uniqueId: qrCode.uniqueId,
+      articleName: qrCode.articleName || qrCode.contractorInput?.articleName,
+      articleDetails: {
+        color: qrCode.contractorInput?.color || 'Unknown',
+        size: qrCode.contractorInput?.size || 'Unknown', 
+        numberOfCartons: qrCode.contractorInput?.totalCartons || 1
+      },
+      manufacturedAt: qrCode.manufacturingDetails?.manufacturedAt || null,
+      receivedAt: qrCode.warehouseDetails?.receivedAt || new Date(),
+      shippedAt: new Date(),
+      trackingNumber: `TRACK_${Date.now()}`
+    };
+
+    // ✅ FIXED: Use valid enum value for status
+    const shipmentData = {
+      shipmentId,
+      distributorId: distributorDetails.distributorId,
+      distributorName: distributorDetails.distributorName,
+      shippedBy: user._id,
+      shippedAt: new Date(),
+      status: 'active', // ✅ Valid enum value
+      items: [newItem],
+      totalCartons: 1
+    };
+
+    // Check if shipment already exists for this distributor today
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    let existingShipment = await Shipment.findOne({
+      distributorId: distributorDetails.distributorId,
+      shippedAt: { $gte: today, $lt: tomorrow },
+      status: 'active' // ✅ Use valid enum value
+    });
+
+    let shipment;
+    if (existingShipment) {
+      // Add item to existing shipment
+      existingShipment.items.push(newItem);
+      existingShipment.totalCartons = existingShipment.items.length;
+      shipment = await existingShipment.save();
+    } else {
+      // Create new shipment
+      const newShipment = new Shipment(shipmentData);
+      shipment = await newShipment.save();
+    }
+
+    // ✅ CRITICAL: Manually update inventory after shipment creation
+    await updateInventoryAfterShipment(qrCode);
+
+    return shipment;
+
+  } catch (error) {
+    console.error('Error creating/updating shipment:', error);
+    throw error;
+  }
+};
+
+// ✅ NEW: Function to manually update inventory after shipment
+const updateInventoryAfterShipment = async (qrCode) => {
+  try {
+
+    const articleName = qrCode.articleName || qrCode.contractorInput?.articleName || 'Unknown';
+    
+    // Find the product using aggregation
+    const productWithArticle = await Product.aggregate([
+      { $unwind: '$variants' },
+      { $unwind: '$variants.articles' },
+      { 
+        $match: { 
+          'variants.articles.name': { $regex: new RegExp('^' + articleName + '$', 'i') }
+        }
+      },
+      { $limit: 1 }
+    ]);
+
+    if (!productWithArticle || productWithArticle.length === 0) {
+      throw new Error(`Product not found for article: ${articleName}`);
+    }
+
+    const product = await Product.findById(productWithArticle[0]._id);
+    const inventory = await Inventory.findOne({ productId: product._id });
+    
+    if (!inventory) {
+      throw new Error('Inventory record not found');
+    }
+
+    // ✅ MANUALLY update the item status in inventory
+    const itemIndex = inventory.items.findIndex(item => 
+      item.qrCodeId.toString() === qrCode._id.toString()
+    );
+
+    if (itemIndex !== -1) {
+      // Update the item status from 'received' to 'shipped'
+      inventory.items[itemIndex].status = 'shipped';
+      inventory.items[itemIndex].shippedAt = new Date();
+      
+      // ✅ CRITICAL: Manually recalculate the counts
+      inventory.quantityByStage.received = inventory.items.filter(i => i.status === 'received').length;
+      inventory.quantityByStage.shipped = inventory.items.filter(i => i.status === 'shipped').length;
+      inventory.availableQuantity = inventory.quantityByStage.received;
+      inventory.lastUpdated = new Date();
+
+      // Save the updated inventory
+      await inventory.save();
+      
+      console.log('✅ Inventory manually updated after shipment:', {
+        articleName,
+        received: inventory.quantityByStage.received,
+        shipped: inventory.quantityByStage.shipped,
+        availableQuantity: inventory.availableQuantity
+      });
+    } else {
+      console.warn('Item not found in inventory for QR code:', qrCode.uniqueId);
+    }
+
+    return inventory;
+
+  } catch (error) {
+    console.error('Error updating inventory after shipment:', error);
+    throw error;
+  }
+};
 
 
 
-export {register, login, getAdmin, addDistributor, deleteDistributor, getDistributors, updateDistributor, generateOrderPerforma, addFestivleImage, getFestivleImages, generateQRCodes, downloadQRCodes, scanQRCode, getQRStatistics, getInventoryData, getSingleProductInventory, getAllInventory}
+const getShipmentDetails = async (req, res) => {
+  try {
+    const { shipmentId } = req.params;
+    
+    const shipment = await Shipment.findOne({ shipmentId })
+      .populate('distributorId', 'name phoneNo email')
+      .populate('shippedBy', 'name phoneNo');
+
+    if (!shipment) {
+      return res.status(404).json({
+        result: false,
+        message: 'Shipment not found'
+      });
+    }
+
+    res.status(200).json({
+      result: true,
+      message: 'Shipment details retrieved successfully',
+      data: shipment
+    });
+
+  } catch (error) {
+    console.error('Error fetching shipment details:', error);
+    res.status(500).json({
+      result: false,
+      message: 'Failed to fetch shipment details',
+      error: error.message
+    });
+  }
+};
+
+const getAllShipments = async (req, res) => {
+  try {
+    const { status, distributorId } = req.query;
+    
+    let query = {};
+    if (status) query.status = status;
+    if (distributorId) query.distributorId = distributorId;
+
+    const shipments = await Shipment.find(query)
+      .populate('distributorId', 'name phoneNo email')
+      .populate('shippedBy', 'name phoneNo')
+      .sort({ shippedAt: -1 });
+
+    res.status(200).json({
+      result: true,
+      message: 'Shipments retrieved successfully',
+      data: {
+        shipments,
+        totalCount: shipments.length
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching shipments:', error);
+    res.status(500).json({
+      result: false,
+      message: 'Failed to fetch shipments',
+      error: error.message
+    });
+  }
+};
+
+
+// Get All Users by Role
+const getUsersByRole = async (req, res) => {
+  try {
+    const { role } = req.params;
+    
+    const validRoles = ['contractor', 'warehouse_inspector', 'shipment_manager', 'distributor'];
+    if (!validRoles.includes(role)) {
+      return res.status(statusCodes.badRequest).json({
+        result: false,
+        message: "Invalid role specified"
+      });
+    }
+
+    const users = await userModel.find({ 
+      role,
+      isActive: true 
+    }).select('-password -refreshToken').sort({ createdAt: -1 });
+
+    // Format response based on role
+    const formattedUsers = users.map(user => {
+      let userData = {
+        _id: user._id,
+        phoneNo: user.phoneNo,
+        role: user.role,
+        isActive: user.isActive,
+        createdAt: user.createdAt
+      };
+
+      switch (role) {
+        case 'contractor':
+          userData.fullName = user.contractorDetails?.fullName;
+          userData.totalItemsProduced = user.contractorDetails?.totalItemsProduced || 0;
+          break;
+        case 'warehouse_inspector':
+          userData.fullName = user.warehouseInspectorDetails?.fullName;
+          userData.totalItemsInspected = user.warehouseInspectorDetails?.totalItemsInspected || 0;
+          userData.itemsProcessedToday = user.warehouseInspectorDetails?.itemsProcessedToday || 0;
+          break;
+        case 'shipment_manager':
+          userData.fullName = user.shipmentManagerDetails?.fullName;
+          userData.totalShipmentsHandled = user.shipmentManagerDetails?.totalShipmentsHandled || 0;
+          break;
+        case 'distributor':
+          userData.name = user.name;
+          userData.partyName = user.distributorDetails?.partyName;
+          userData.address = user.distributorDetails?.address;
+          break;
+      }
+
+      return userData;
+    });
+
+    res.status(statusCodes.success).json({
+      result: true,
+      message: `${role}s retrieved successfully`,
+      data: formattedUsers
+    });
+
+  } catch (error) {
+    console.error('Error getting users by role:', error);
+    res.status(statusCodes.serverError).json({
+      result: false,
+      message: "Failed to retrieve users"
+    });
+  }
+};
+
+// Get All Contractors
+const getContractors = async (req, res) => {
+  req.params.role = 'contractor';
+  return getUsersByRole(req, res);
+};
+
+// Get All Warehouse Managers
+const getWarehouseManagers = async (req, res) => {
+  req.params.role = 'warehouse_inspector';
+  return getUsersByRole(req, res);
+};
+
+// Get All Shipment Managers  
+const getShipmentManagers = async (req, res) => {
+  req.params.role = 'shipment_manager';
+  return getUsersByRole(req, res);
+};
+
+// Update User Stats (used by scanners)
+const updateUserStats = async (req, res) => {
+  try {
+    const { userId, action } = req.body;
+
+    const user = await userModel.findById(userId);
+    if (!user) {
+      return res.status(statusCodes.notFound).json({
+        result: false,
+        message: "User not found"
+      });
+    }
+
+    // Use the schema method to update stats
+    await user.updateStats(action);
+
+    res.status(statusCodes.success).json({
+      result: true,
+      message: "User stats updated successfully"
+    });
+
+  } catch (error) {
+    console.error('Error updating user stats:', error);
+    res.status(statusCodes.serverError).json({
+      result: false,
+      message: "Failed to update user stats"
+    });
+  }
+};
+
+// Delete User (soft delete)
+const deleteUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const user = await userModel.findByIdAndUpdate(
+      id,
+      { $set: { isActive: false } },
+      { new: true }
+    ).select('-password -refreshToken');
+
+    if (!user) {
+      return res.status(statusCodes.notFound).json({
+        result: false,
+        message: "User not found"
+      });
+    }
+
+    res.status(statusCodes.success).json({
+      result: true,
+      message: "User deactivated successfully",
+      data: user
+    });
+
+  } catch (error) {
+    console.error('Error deleting user:', error);
+    res.status(statusCodes.serverError).json({
+      result: false,
+      message: "Failed to delete user"
+    });
+  }
+};
+
+// Add to admin.controllers.js
+const getInventoryByArticleId = async (req, res) => {
+  try {
+    const { articleId } = req.params;
+
+    if (!articleId) {
+      return res.status(400).json({
+        result: false,
+        message: 'Article ID is required'
+      });
+    }
+
+    // Get inventory items filtered by articleId
+    const inventories = await Inventory.find({
+      'items.articleDetails.articleId': mongoose.Types.ObjectId(articleId)
+    })
+    .populate('productId', 'segment variants')
+    .lean();
+
+    if (!inventories || inventories.length === 0) {
+      return res.status(404).json({
+        result: false,
+        message: 'No inventory found for this article'
+      });
+    }
+
+    // Filter items to only include those matching the articleId
+    const filteredInventories = inventories.map(inventory => ({
+      ...inventory,
+      items: inventory.items.filter(item => 
+        item.articleDetails.articleId && 
+        item.articleDetails.articleId.toString() === articleId
+      )
+    }));
+
+    // Get article details from Product collection
+    const articleDetails = await Product.aggregate([
+      { $unwind: "$variants" },
+      { $unwind: "$variants.articles" },
+      { $match: { "variants.articles._id": mongoose.Types.ObjectId(articleId) } },
+      {
+        $project: {
+          articleId: "$variants.articles._id",
+          articleName: "$variants.articles.name",
+          colors: "$variants.articles.colors",
+          sizes: "$variants.articles.sizes",
+          variantName: "$variants.name",
+          segment: "$segment"
+        }
+      },
+      { $limit: 1 }
+    ]);
+
+    // Calculate totals for this specific article
+    const allItems = filteredInventories.flatMap(inv => inv.items);
+    const totalReceived = allItems.filter(item => item.status === 'received').length;
+    const totalShipped = allItems.filter(item => item.status === 'shipped').length;
+
+    res.status(200).json({
+      result: true,
+      message: 'Article inventory retrieved successfully',
+      data: {
+        articleDetails: articleDetails[0] || null,
+        inventories: filteredInventories,
+        summary: {
+          totalReceived,
+          totalShipped,
+          availableQuantity: totalReceived,
+          totalItems: allItems.length
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching inventory by article ID:', error);
+    res.status(500).json({
+      result: false,
+      message: 'Failed to fetch inventory',
+      error: error.message
+    });
+  }
+};
+
+
+export {register, login, getAdmin, addDistributor, deleteDistributor, getDistributors, updateDistributor, generateOrderPerforma, addFestivleImage, getFestivleImages, generateQRCodes, downloadQRCodes, scanQRCode, getQRStatistics, getInventoryData, getSingleProductInventory, getAllInventory, addContractor, addWarehouseManager, addShipmentManager,
+getContractors,
+  getWarehouseManagers,
+  getShipmentManagers,
+  updateUserStats,
+  deleteUser,
+  getUsersByRole,
+  generateReceiptPdf,
+  generateShipmentReceiptPDF,
+  getInventoryStats,
+  createOrUpdateShipment,
+  getShipmentDetails,
+  getAllShipments,
+  generateShipmentReceipt,
+  getInventoryByArticleId}

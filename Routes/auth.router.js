@@ -1,10 +1,14 @@
+// routes/auth.router.js
 import express from "express";
-import { createNewRefreshToken, getMe, login } from "../Controllers/Auth/auth.js";
+import { login, createNewRefreshToken, getMe, logout } from "../Controllers/Auth/auth.js";
+import authenticateToken from "../MIddlewares/auth.middleware.js";
 
-let AuthRouter = express.Router();
+const AuthRouter = express.Router();
 
-AuthRouter.post("/login", login)
-.get("/refresh", createNewRefreshToken)
-.get("/me", getMe)
+// ✅ Universal login route
+AuthRouter.post("/login", login);
+AuthRouter.get("/refresh", createNewRefreshToken);
+AuthRouter.get("/me", authenticateToken, getMe);
+AuthRouter.post("/logout", authenticateToken, logout);
 
-export default AuthRouter
+export default AuthRouter;

@@ -1,108 +1,221 @@
-import AdminModel from "../../Models/Admin.model.js";
-import jwt from 'jsonwebtoken'
-import userModel from "../../Models/distributor.model.js";
-import bcrypt from "bcrypt"
-import statusCodes from "../../Utils/statuscodes.js";
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcrypt';
+import statusCodes from "../../Utils/statusCodes.js";
+import userModel from '../../Models/user.model.js';
 
 let cookieOption = {
     path: "/",
     httpOnly: true,
-    secure: true,
-    sameSite: 'none'
-    // sameSite: 'Lax'
-}
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
+};
+
+// ✅ FIXED: login function with better debugging
+const login = async (req, res) => {
+    try {
+        const { phoneNo, password } = req.body;
+
+        if (!phoneNo || !password) {
+            return res.status(statusCodes.badRequest).json({ 
+                result: false, 
+                message: "Phone number and password are required" 
+            });
+        }
+
+        // Find user by phone number
+        const user = await userModel.findOne({ phoneNo });
+        
+        if (!user) {
+            return res.status(statusCodes.notFound).json({ 
+                result: false, 
+                message: "Account not found" 
+            });
+        }
+
+        // Check if account is active
+        if (!user.isActive) {
+            return res.status(statusCodes.unauthorized).json({ 
+                result: false, 
+                message: "Account is deactivated. Contact administrator." 
+            });
+        }
+
+        // ✅ DEBUG: Log password comparison details
+        console.log("🔍 Login Debug:");
+        console.log("  - Plain password:", password);
+        console.log("  - Stored hash length:", user.password.length);
+        console.log("  - Hash starts with $2:", user.password.startsWith('$2'));
+
+        // Verify password
+        const isMatch = await bcrypt.compare(password, user.password);
+        console.log("  - Password match result:", isMatch);
+
+        if (!isMatch) {
+            return res.status(statusCodes.unauthorized).json({ 
+                result: false, 
+                message: "Incorrect password" 
+            });
+        }
+
+        // Generate tokens
+        const accessToken = jwt.sign(
+            { 
+                _id: user._id, 
+                phoneNo: user.phoneNo, 
+                role: user.role,
+                name: user.name 
+            },
+            process.env.ACCESS_JWT_SECRET,
+            { expiresIn: process.env.ACCESS_JWT_EXPIRY }
+        );
+
+        const refreshToken = jwt.sign(
+            { 
+                _id: user._id, 
+                role: user.role 
+            },
+            process.env.REFRESH_JWT_SECRET,
+            { expiresIn: process.env.REFRESH_JWT_EXPIRY }
+        );
+
+        // Update last login
+        await userModel.updateOne(
+            { _id: user._id }, 
+            { 
+                $set: { 
+                    refreshToken,
+                    lastLogin: new Date() 
+                }
+            }
+        );
+
+        // Set cookies
+        const cookieOption = {
+            path: "/",
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
+        };
+
+        res.cookie("accessToken", accessToken, cookieOption);
+        res.cookie("refreshToken", refreshToken, cookieOption);
+
+        return res.status(statusCodes.success).json({ 
+            result: true, 
+            message: "Login successful",
+            role: user.role,  // ✅ Add this for frontend compatibility
+            data: {
+                role: user.role,
+                name: user.name
+            }
+        });
+
+    } catch (error) {
+        console.error('Login error:', error);
+        return res.status(statusCodes.serverError).json({ 
+            result: false, 
+            message: "Login failed. Please try again." 
+        });
+    }
+};
 
 const createNewRefreshToken = async (req, res) => {
     try {
-        let existingRefreshToken = req.cookies.refreshToken;
+        const existingRefreshToken = req.cookies.refreshToken;
 
         if (!existingRefreshToken) {
-            return res.status(statusCodes.unauthorized).send({ result: false, message: "Unauthorized Access" });
+            return res.status(statusCodes.unauthorized).json({ 
+                result: false, 
+                message: "Refresh token required" 
+            });
         }
 
         const decodedToken = jwt.verify(existingRefreshToken, process.env.REFRESH_JWT_SECRET);
+        const user = await userModel.findById(decodedToken._id);
 
-        // Determine user role dynamically
-        const Model = decodedToken.role === "admin" ? AdminModel : userModel;
-
-        const user = await Model.findById(decodedToken._id)
-
-        if (!user) {
-            return res.status(statusCodes.unauthorized).send({ result: false, message: "Unauthorized Access" });
+        if (!user || !user.isActive) {
+            return res.status(statusCodes.unauthorized).json({ 
+                result: false, 
+                message: "User not found or inactive" 
+            });
         }
-        
-        // Generate new tokens with the same role
+
+        // Generate new access token
         const accessToken = jwt.sign(
-            { _id: user._id, phoneNo: user.phoneNo, role: decodedToken.role },
+            { 
+                _id: user._id, 
+                phoneNo: user.phoneNo, 
+                role: user.role,
+                name: user.name 
+            },
             process.env.ACCESS_JWT_SECRET,
             { expiresIn: process.env.ACCESS_JWT_EXPIRY }
         );
 
         return res.status(statusCodes.success)
             .cookie("accessToken", accessToken, cookieOption)
-            .send({ result: true, message: "Access Token Refreshed"});
+            .json({ result: true, message: "Access token refreshed" });
 
     } catch (error) {
-        return res.status(statusCodes.serverError).send({ result: false, message: "Error in Creating Token. Please Try Again Later" });
+        console.error('Token refresh error:', error);
+        return res.status(statusCodes.unauthorized).json({ 
+            result: false, 
+            message: "Invalid refresh token" 
+        });
     }
 };
 
-const login = async (req,res) => {
+const getMe = async (req, res) => {
     try {
-        const { phoneNo, password } = req.body;
+        const user = await userModel.findById(req.user._id).select('-password -refreshToken');
 
-        // Check both Admin and Distributor models
-        let user = await AdminModel.findOne({ phoneNo }) || await userModel.findOne({ phoneNo });
-        
-        if (!user) return res.status(statusCodes.notFound).json({ result: false, message: "Account Not Found" });
-
-        let isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) return res.status(statusCodes.unauthorized).json({ result: false, message: "Incorrect Password" });
-
-        // Generate tokens
-        const accessToken = jwt.sign(
-            { _id: user._id, role: user.role }, 
-            process.env.ACCESS_JWT_SECRET, 
-            { expiresIn: process.env.ACCESS_JWT_EXPIRY }
-        );
-        const refreshToken = jwt.sign(
-            { _id: user._id, role: user.role }, 
-            process.env.REFRESH_JWT_SECRET, 
-            { expiresIn: process.env.REFRESH_JWT_EXPIRY }
-        );
-
-        // Send tokens via HttpOnly cookies
-        res.cookie("accessToken", accessToken, cookieOption);
-        res.cookie("refreshToken", refreshToken, cookieOption);
-
-        return res.status(statusCodes.success).json({ result: true, message: "Login Success" , role: user.role });
-    } catch (error) {
-        return res.status(statusCodes.serverError).json({ result: false, message: "Login Failed" });
-    }
-}
-
-const getMe = async (req,res) => {
-    try {
-        const token = req?.cookies.accessToken;
-
-        if(!token){
-            return res.status(statusCodes.unauthorized).json({ result: false, message: "Unauthorized" });
+        if (!user || !user.isActive) {
+            return res.status(statusCodes.notFound).json({ 
+                result: false, 
+                message: "User not found" 
+            });
         }
 
-        let decodedToken = jwt.verify(token, process.env.ACCESS_JWT_SECRET);
-
-        const Model = decodedToken.role === "admin" ? AdminModel : userModel;
-
-        const data = await Model.findById(decodedToken._id)
-
-        return res.status(statusCodes.success).json({ result: true, message: "User Found", data});
+        return res.status(statusCodes.success).json({ 
+            result: true, 
+            message: "User data retrieved", 
+            data: user
+        });
 
     } catch (error) {
-        return res.status(statusCodes.serverError).json({ result: false, message: "Error in Getting User" });
+        console.error('GetMe error:', error);
+        return res.status(statusCodes.serverError).json({ 
+            result: false, 
+            message: "Error retrieving user data" 
+        });
     }
-}
+};
 
+const logout = async (req, res) => {
+    try {
+        // Clear refresh token from database
+        if (req.user?._id) {
+            await userModel.updateOne(
+                { _id: req.user._id }, 
+                { $unset: { refreshToken: 1 } }
+            );
+        }
 
+        // Clear cookies
+        res.clearCookie("accessToken", cookieOption);
+        res.clearCookie("refreshToken", cookieOption);
+        
+        return res.status(statusCodes.success).json({ 
+            result: true, 
+            message: "Logged out successfully" 
+        });
+    } catch (error) {
+        console.error('Logout error:', error);
+        return res.status(statusCodes.serverError).json({ 
+            result: false, 
+            message: "Logout failed" 
+        });
+    }
+};
 
-export {createNewRefreshToken, login, getMe};
-
+export { login, createNewRefreshToken, getMe, logout };

@@ -4,7 +4,7 @@ import Festive from "../../Models/Festivle.model.js";
 import productModel from "../../Models/Product.model.js";
 import purchaseProductModel from "../../Models/Purchasedproduct.model.js";
 import { uploadOnCloudinary } from "../../Utils/cloudinary.js";
-import statusCodes from "../../Utils/statuscodes.js";
+import statusCodes from "../../Utils/statusCodes.js";
 import zod from 'zod';
 import xlsx from "xlsx";
 import path from 'path';
@@ -595,7 +595,47 @@ const getCategories = async (req,res) => {
   }
 }
 
+// Add this to products.controllers.js
+// Add this new function to your products.controllers.js
+const getArticlesForDropdown = async (req, res) => {
+  try {
+    // Use aggregation to flatten the nested structure and get articles with their IDs
+    const articles = await productModel.aggregate([
+      { $unwind: "$variants" },
+      { $unwind: "$variants.articles" },
+      {
+        $project: {
+          articleId: "$variants.articles._id",
+          articleName: "$variants.articles.name", 
+          colors: "$variants.articles.colors",
+          sizes: "$variants.articles.sizes",
+          images: "$variants.articles.images",
+          variantId: "$variants._id",
+          variantName: "$variants.name", 
+          productId: "$_id",
+          segment: "$segment",
+          allColorsAvailable: "$variants.articles.allColorsAvailable"
+        }
+      },
+      { $sort: { articleName: 1 } }
+    ]);
+
+    return res.status(200).json({
+      result: true,
+      message: "Articles retrieved successfully",
+      data: articles
+    });
+
+  } catch (error) {
+    console.error('Error fetching articles:', error);
+    return res.status(500).json({
+      result: false,
+      message: "Error fetching articles",
+      error: error.message
+    });
+  }
+};
 
 
-export {addProduct,importProductsFromExcel ,deleteProduct, getAllProdcuts, addBestDeals, getDeals, deleteDeals, updateDeal, getPurchases, markPurchaseConfirm, addCategories, getCategories}
+export {addProduct,importProductsFromExcel ,deleteProduct, getAllProdcuts, addBestDeals, getDeals, deleteDeals, updateDeal, getPurchases, markPurchaseConfirm, addCategories, getCategories, getArticlesForDropdown}
 
