@@ -1,6 +1,5 @@
 import jwt from "jsonwebtoken"
 import userModel from "../../Models/user.model.js"
-import statusCodes from "../../Utils/statusCodes.js"
 import zod from 'zod'
 import bcrypt from "bcrypt"
 import productModel from "../../Models/Product.model.js"
@@ -17,6 +16,17 @@ let cookieOption = {
     // sameSite: 'Lax'
     sameSite: 'none'
 }
+
+let statusCodes = {
+    success: 200,
+    noContent:204,
+    badRequest: 400,
+    unauthorized: 403,
+    notFound: 404,
+    serverError: 500,
+    forbidden: 402
+}
+
 
 const loginValidationSchema = zod.object({
         phoneNo: zod
