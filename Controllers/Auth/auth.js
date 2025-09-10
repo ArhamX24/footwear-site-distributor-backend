@@ -1,14 +1,24 @@
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
-import statusCodes from "../../Utils/statusCodes.js";
 import userModel from '../../Models/user.model.js';
 
 let cookieOption = {
     path: "/",
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
+    secure: true,
+    sameSite: 'lax'
 };
+
+let statusCodes = {
+    success: 200,
+    noContent:204,
+    badRequest: 400,
+    unauthorized: 403,
+    notFound: 404,
+    serverError: 500,
+    forbidden: 402
+}
+
 
 // ✅ FIXED: login function with better debugging
 const login = async (req, res) => {

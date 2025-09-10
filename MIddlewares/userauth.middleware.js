@@ -1,7 +1,17 @@
 import userModel from "../Models/user.model.js";
 import jwt from 'jsonwebtoken'
-import statusCodes from "../Utils/statusCodes.js";
 import mongoose from "mongoose";
+
+let statusCodes = {
+    success: 200,
+    noContent:204,
+    badRequest: 400,
+    unauthorized: 403,
+    notFound: 404,
+    serverError: 500,
+    forbidden: 402
+}
+
 
 const userAuth = async (req,res,next) => {
     try {

@@ -1,6 +1,16 @@
 import jwt from "jsonwebtoken"
 import AdminModel from "../Models/Admin.model.js"
-import statusCodes from "../Utils/statusCodes.js"
+
+let statusCodes = {
+    success: 200,
+    noContent:204,
+    badRequest: 400,
+    unauthorized: 403,
+    notFound: 404,
+    serverError: 500,
+    forbidden: 402
+}
+
 
 const adminAuth = async (req,res,next) => {
     try {

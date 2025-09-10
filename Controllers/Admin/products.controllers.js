@@ -4,13 +4,23 @@ import Festive from "../../Models/Festivle.model.js";
 import productModel from "../../Models/Product.model.js";
 import purchaseProductModel from "../../Models/Purchasedproduct.model.js";
 import { uploadOnCloudinary } from "../../Utils/cloudinary.js";
-import statusCodes from "../../Utils/statusCodes.js";
 import zod from 'zod';
 import xlsx from "xlsx";
 import path from 'path';
 import fs from 'fs'
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+
+let statusCodes = {
+    success: 200,
+    noContent:204,
+    badRequest: 400,
+    unauthorized: 403,
+    notFound: 404,
+    serverError: 500,
+    forbidden: 402
+}
+
 
 const productValidationSchema = zod.object({
     name: zod.string().min(1, "Name is required"),

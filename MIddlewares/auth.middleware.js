@@ -1,6 +1,16 @@
 // middleware/auth.js
 import jwt from 'jsonwebtoken'; // ✅ Added missing import
-import statusCodes from '../Utils/statuscodes.js';
+
+let statusCodes = {
+    success: 200,
+    noContent:204,
+    badRequest: 400,
+    unauthorized: 403,
+    notFound: 404,
+    serverError: 500,
+    forbidden: 402
+}
+
 
 const authenticateToken = (req, res, next) => {
     const token = req?.cookies?.accessToken;

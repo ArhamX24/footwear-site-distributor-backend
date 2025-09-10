@@ -77,8 +77,8 @@ let cookieOption = {
     path: "/",
     httpOnly: true,
     secure: true,
-    // sameSite: 'Lax'
-    sameSite: 'none'
+    sameSite: 'Lax'
+    // sameSite: 'none'
 }
 
 const register = async (req,res) => {
