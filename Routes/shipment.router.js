@@ -8,7 +8,5 @@ const shipmentRouter = express.Router();
 shipmentRouter.post("/scan/:uniqueId", shipmentOnly, scanQRCode)
 .post('/receipt/generate', generateShipmentReceiptPDF)
 
-// shipmentRouter.post("/create-shipment", shipmentOnly, createShipment);
-// shipmentRouter.get("/dashboard", shipmentOnly, getShipmentDashboard);
-
 export default shipmentRouter;
+

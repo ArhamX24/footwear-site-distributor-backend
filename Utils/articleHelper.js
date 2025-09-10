@@ -155,8 +155,6 @@ const createNewArticle = async (articleName, colors, sizes, userId) => {
     variant.articles.push(newArticle);
     await product.save();
 
-    console.log(`✅ New article created: "${articleName}" in "New Articles/Contractor Additions"`);
-
     return {
       productId: product._id,
       variantName: 'Contractor Additions',

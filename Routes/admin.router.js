@@ -24,7 +24,8 @@ import {
     deleteUser,
     getUsersByRole,
     updateUserStats,
-    getInventoryByArticleId
+    getInventoryByArticleId,
+    getShipmentDetails
 } from "../Controllers/Admin/admin.controllers.js";
 import { adminOnly } from "../MIddlewares/roleauth.middleware.js";
 import { 
@@ -42,6 +43,13 @@ import {
     getCategories,
     getArticlesForDropdown 
 } from "../Controllers/Admin/products.controllers.js";
+import {
+  getAllShipments,
+  getAutoDeleteSettings,
+  updateAutoDeleteSettings,
+  cleanupOldShipments,
+  viewShipmentDetails
+} from '../Controllers/Admin/shipment.controllers.js'
 import upload from "../MIddlewares/multer.middleware.js";
 import multer from "multer";
 
@@ -60,7 +68,6 @@ adminRouter.post("/register", register)
 .get("/products/getproducts", getAllProdcuts)
 .post("/products/import-excel", upload.single('excel'), importProductsFromExcel)
 .get("/products/articles", getArticlesForDropdown)
-
 
 // Deal management routes
 .post("/deal/add", upload.array('images', 1), addBestDeals)
@@ -112,5 +119,18 @@ adminRouter.post("/register", register)
 
 .put("/users/:id", adminOnly, updateUserStats)
 .delete("/users/:id", adminOnly, deleteUser)
+
+// ========== NEW SHIPMENT MANAGEMENT ROUTES ==========
+// Shipment listing and details routes
+.get("/shipments", adminOnly, getAllShipments)
+.get("/shipments/:shipmentId", adminOnly, getShipmentDetails)
+.get("/shipments/view-details/:shipmentId", adminOnly, viewShipmentDetails)
+
+// Auto-delete settings management routes
+.get("/shipments/auto-delete-settings", adminOnly, getAutoDeleteSettings)
+.put("/shipments/auto-delete-settings", adminOnly, updateAutoDeleteSettings)
+
+// Cleanup operations route
+.delete("/shipments/cleanup", adminOnly, cleanupOldShipments)
 
 export default adminRouter;

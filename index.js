@@ -109,9 +109,6 @@ const processExpiredDeals = async () => {
       await dealsModel.deleteOne({ _id: deal._id });
     }
     
-    if (expiredDeals.length > 0) {
-      console.log(`✅ Processed ${expiredDeals.length} expired deals at ${new Date().toISOString()}`);
-    }
     
   } catch (error) {
     console.error("❌ Error processing expired deals:", error);
@@ -140,15 +137,6 @@ dbConnect()
     const PORT = process.env.PORT || 5000;
     server.listen(PORT, () => {
       console.log(`✅ Server running on port ${PORT}`);
-      console.log(`🌐 API Base URL: http://localhost:${PORT}`);
-      console.log(`📋 Available routes:`);
-      console.log(`   • Auth: http://localhost:${PORT}/api/v1/auth`);
-      console.log(`   • Admin: http://localhost:${PORT}/api/v1/admin`);
-      console.log(`   • Distributor: http://localhost:${PORT}/api/v1/distributor`);
-      console.log(`   • Contractor: http://localhost:${PORT}/api/v1/contractor`);
-      console.log(`   • Warehouse: http://localhost:${PORT}/api/v1/warehouse`);
-      console.log(`   • Shipment: http://localhost:${PORT}/api/v1/shipment`);
-      console.log(`   • Health Check: http://localhost:${PORT}/api/v1/health`);
     });
   })
   .catch((err) => {

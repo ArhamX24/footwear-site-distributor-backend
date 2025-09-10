@@ -1,6 +1,6 @@
 import jwt from "jsonwebtoken"
 import AdminModel from "../Models/Admin.model.js"
-import statusCodes from "../Utils/statuscodes.js"
+import statusCodes from "../Utils/statusCodes.js"
 
 const adminAuth = async (req,res,next) => {
     try {

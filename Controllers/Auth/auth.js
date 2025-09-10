@@ -40,15 +40,8 @@ const login = async (req, res) => {
             });
         }
 
-        // ✅ DEBUG: Log password comparison details
-        console.log("🔍 Login Debug:");
-        console.log("  - Plain password:", password);
-        console.log("  - Stored hash length:", user.password.length);
-        console.log("  - Hash starts with $2:", user.password.startsWith('$2'));
-
         // Verify password
         const isMatch = await bcrypt.compare(password, user.password);
-        console.log("  - Password match result:", isMatch);
 
         if (!isMatch) {
             return res.status(statusCodes.unauthorized).json({ 
@@ -111,7 +104,6 @@ const login = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Login error:', error);
         return res.status(statusCodes.serverError).json({ 
             result: false, 
             message: "Login failed. Please try again." 
@@ -183,7 +175,6 @@ const getMe = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('GetMe error:', error);
         return res.status(statusCodes.serverError).json({ 
             result: false, 
             message: "Error retrieving user data" 
@@ -210,7 +201,6 @@ const logout = async (req, res) => {
             message: "Logged out successfully" 
         });
     } catch (error) {
-        console.error('Logout error:', error);
         return res.status(statusCodes.serverError).json({ 
             result: false, 
             message: "Logout failed" 

@@ -23,6 +23,7 @@ import Shipment from "../../Models/shipment.model.js";
 import { addToInventory, removeFromInventoryAndCreateShipment } from "../../Utils/inventoryHelpers.js";
 import { createCanvas, loadImage } from 'canvas';
 import PDFDocument from 'pdfkit';
+import mongoose from "mongoose";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -371,7 +372,6 @@ const getDistributors = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error getting distributors:', error);
         res.status(statusCodes.serverError).json({
             result: false,
             message: "Failed to retrieve distributors"
@@ -424,7 +424,7 @@ try {
 
 const generateQRCodes = async (req, res) => {
   try {
-    const { articleId, articleName, colors, sizes, numberOfQRs } = req.body; // ✅ Add articleId
+    const { articleId, articleName, colors, sizes, numberOfQRs } = req.body;
     const userId = req.user?._id;
 
     // Validate inputs
@@ -442,11 +442,14 @@ const generateQRCodes = async (req, res) => {
       });
     }
 
+    // ✅ FIX: Use 'new' keyword with mongoose.Types.ObjectId
+    const objectId = new mongoose.Types.ObjectId(articleId);
+
     // ✅ Fetch article details from Product using articleId
     const articleData = await Product.aggregate([
       { $unwind: "$variants" },
       { $unwind: "$variants.articles" },
-      { $match: { "variants.articles._id": mongoose.Types.ObjectId(articleId) } },
+      { $match: { "variants.articles._id": objectId } }, // ✅ Use the created objectId
       {
         $project: {
           articleId: "$variants.articles._id",
@@ -657,7 +660,6 @@ const downloadQRCodes = async (req, res) => {
     });
 
     archive.on('error', (err) => {
-      console.error('Archive error:', err);
       res.status(500).json({
         result: false,
         message: "Failed to create zip archive",
@@ -785,7 +787,6 @@ Next Steps:
     await archive.finalize();
 
   } catch (error) {
-    console.error('Error downloading QR codes:', error);
     res.status(500).json({
       result: false,
       message: 'Failed to download QR codes',
@@ -953,7 +954,6 @@ const scanQRCode = async (req, res) => {
           }
         });
       } catch (shipmentError) {
-        console.warn('Shipment processing failed:', shipmentError.message);
         return res.status(500).json({
           result: false,
           message: "Failed to process shipment",
@@ -977,7 +977,6 @@ const scanQRCode = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error scanning QR code:', error);
     res.status(500).json({
       result: false,
       message: "Failed to process QR code scan",
@@ -999,9 +998,6 @@ const updateInventoryFromQRScan = async (qrCode, user, qualityCheck, notes) => {
     if (!articleName) {
       throw new Error('Article name not found in QR code data');
     }
-
-    console.log('🔍 Searching for article:', articleName);
-
     // ✅ Search using MongoDB aggregation for nested articles
     const productWithArticle = await Product.aggregate([
       { $unwind: '$variants' },
@@ -1035,15 +1031,7 @@ const updateInventoryFromQRScan = async (qrCode, user, qualityCheck, notes) => {
     }
 
     // Sync the QR code data with inventory (will set status to 'received')
-    await inventory.syncWithQRCode(qrCode._id);
-    
-    console.log('✅ Inventory updated successfully for article:', articleName);
-    console.log('📊 Inventory counts:', {
-      received: inventory.quantityByStage.received,
-      shipped: inventory.quantityByStage.shipped,
-      availableQuantity: inventory.availableQuantity
-    });
-    
+    await inventory.syncWithQRCode(qrCode._id);    
     return inventory;
 
   } catch (error) {
@@ -1086,13 +1074,6 @@ const updateInventoryOnShipment = async (qrCode, user, distributorDetails) => {
     // ✅ CREATE OR UPDATE SHIPMENT RECORD
     await createOrUpdateShipment(qrCode, user, distributorDetails);
     
-    console.log('✅ Inventory updated on shipment');
-    console.log('📊 Updated inventory stats:', {
-      received: inventory.quantityByStage.received,
-      shipped: inventory.quantityByStage.shipped,
-      availableQuantity: inventory.availableQuantity
-    });
-
     return inventory;
 
   } catch (error) {
@@ -1159,7 +1140,6 @@ const getInventoryData = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error fetching inventory data:', error);
     res.status(500).json({
       result: false,
       message: 'Failed to fetch inventory data',
@@ -1198,7 +1178,6 @@ const getInventoryStats = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error fetching inventory stats:', error);
     res.status(500).json({
       result: false,
       message: 'Failed to fetch inventory stats',
@@ -1373,8 +1352,6 @@ const generateShipmentReceipt = async (req, res) => {
     doc.end();
 
   } catch (error) {
-    console.error('Error generating PDF receipt:', error);
-    
     // If response headers haven't been sent yet, send JSON error
     if (!res.headersSent) {
       res.status(500).json({
@@ -1477,14 +1454,6 @@ const generateReceiptPdf = async (req, res) => {
   try {
     const { qrCodes, articleInfo } = req.body;
     const contractorInfo = req.user; // ✅ Get contractor info from authenticated user
-
-    console.log('PDF Generation Debug:');
-    console.log('qrCodes:', qrCodes?.length);
-    console.log('articleInfo:', articleInfo);
-    console.log('contractorInfo:', contractorInfo?.name, contractorInfo?.phoneNo);
-
-    
-
     if (!qrCodes || qrCodes.length === 0) {
       return res.status(400).json({
         result: false,
@@ -1579,7 +1548,6 @@ const generateReceiptPdf = async (req, res) => {
     doc.end();
 
   } catch (error) {
-    console.error('Error generating receipt PDF:', error);
     res.status(500).json({
       result: false,
       message: 'Failed to generate receipt PDF',
@@ -1954,7 +1922,6 @@ const getSingleProductInventory = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error fetching single product inventory:', error);
     res.status(500).json({
       result: false,
       message: 'Failed to get product inventory data',
@@ -2068,7 +2035,6 @@ const getAllInventory = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error fetching all inventory data:', error);
     res.status(500).json({
       result: false,
       message: 'Failed to get all inventory data',
@@ -2259,7 +2225,6 @@ const getQRStatistics = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error getting QR statistics:', error);
     res.status(500).json({
       result: false,
       message: 'Failed to retrieve QR statistics',
@@ -2272,9 +2237,6 @@ const getQRStatistics = async (req, res) => {
 // ✅ FIXED: addContractor - Let schema handle password hashing
 const addContractor = async (req, res) => {
   try {
-
-    console.log(req?.body);
-    
     const { fullName, phoneNo, password } = req.body;
 
     if (!fullName || !phoneNo || !password) {
@@ -2330,7 +2292,6 @@ const addContractor = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error adding contractor:', error);
     res.status(statusCodes.serverError).json({
       result: false,
       message: "Failed to add contractor",
@@ -2397,7 +2358,6 @@ const addWarehouseManager = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error adding warehouse manager:', error);
     res.status(statusCodes.serverError).json({
       result: false,
       message: "Failed to add warehouse manager",
@@ -2464,7 +2424,6 @@ const addShipmentManager = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error adding shipment manager:', error);
     res.status(statusCodes.serverError).json({
       result: false,
       message: "Failed to add shipment manager",
@@ -2531,7 +2490,6 @@ const addDistributor = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error adding distributor:', error);
         return res.status(statusCodes.serverError).json({
             result: false, 
             message: "Error in Adding Distributor. Please Try Again Later",
@@ -2658,12 +2616,6 @@ const updateInventoryAfterShipment = async (qrCode) => {
       // Save the updated inventory
       await inventory.save();
       
-      console.log('✅ Inventory manually updated after shipment:', {
-        articleName,
-        received: inventory.quantityByStage.received,
-        shipped: inventory.quantityByStage.shipped,
-        availableQuantity: inventory.availableQuantity
-      });
     } else {
       console.warn('Item not found in inventory for QR code:', qrCode.uniqueId);
     }
@@ -2678,13 +2630,18 @@ const updateInventoryAfterShipment = async (qrCode) => {
 
 
 
+// Enhanced controller method for getting shipment details with article images
 const getShipmentDetails = async (req, res) => {
   try {
     const { shipmentId } = req.params;
     
-    const shipment = await Shipment.findOne({ shipmentId })
-      .populate('distributorId', 'name phoneNo email')
-      .populate('shippedBy', 'name phoneNo');
+    const shipment = await Shipment.findById(shipmentId)
+      .populate('distributorId', 'name phoneNo email distributorDetails')
+      .populate('shippedBy', 'name phoneNo')
+      .populate({
+        path: 'items.qrCodeId',
+        select: 'articleName articleDetails images'
+      });
 
     if (!shipment) {
       return res.status(404).json({
@@ -2693,10 +2650,40 @@ const getShipmentDetails = async (req, res) => {
       });
     }
 
+    // Enhance shipment with article images
+    const shipmentObj = shipment.toObject();
+    
+    // Get article images for each item
+    for (let item of shipmentObj.items) {
+      if (item.articleName) {
+        try {
+          const product = await Product.findOne({
+            'variants.articles.name': { $regex: new RegExp(item.articleName, 'i') }
+          });
+          
+          if (product) {
+            const variant = product.variants.find(v => 
+              v.articles.some(a => a.name.toLowerCase().includes(item.articleName.toLowerCase()))
+            );
+            if (variant) {
+              const article = variant.articles.find(a => 
+                a.name.toLowerCase().includes(item.articleName.toLowerCase())
+              );
+              if (article && article.images.length > 0) {
+                item.articleImage = `${baseURL}/uploads/${article.images[0]}`;
+              }
+            }
+          }
+        } catch (error) {
+          console.log('Error fetching article image:', error);
+        }
+      }
+    }
+
     res.status(200).json({
       result: true,
       message: 'Shipment details retrieved successfully',
-      data: shipment
+      data: shipmentObj
     });
 
   } catch (error) {
@@ -2708,6 +2695,7 @@ const getShipmentDetails = async (req, res) => {
     });
   }
 };
+
 
 const getAllShipments = async (req, res) => {
   try {

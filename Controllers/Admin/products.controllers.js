@@ -337,7 +337,6 @@ const getAllProdcuts = async (req, res) => {
       data: articles
     });
   } catch (error) {
-    console.error(error);
     return res
       .status(statusCodes.serverError)
       .send({ result: false, message: "Internal Server Error" });

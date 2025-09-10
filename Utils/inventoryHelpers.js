@@ -104,8 +104,6 @@ const removeFromInventoryAndCreateShipment = async (qrCode, scannedBy, distribut
     shipment.totalCartons += 1;
     await shipment.save();
 
-    console.log(`✅ Moved carton ${qrCode.uniqueId} from inventory to shipment ${shipment.shipmentId}`);
-    
   } catch (error) {
     console.error('Error in inventory/shipment operation:', error);
     throw error;
