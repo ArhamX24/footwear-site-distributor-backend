@@ -1,6 +1,6 @@
 // middleware/roleAuth.js
 import jwt from 'jsonwebtoken';
-import statusCodes from "../Utils/statusCodes.js";
+import statusCodes from '../Utils/statusCodes.js';
 import userModel from '../Models/user.model.js';
 
 // ✅ Flexible role authorization
