@@ -169,16 +169,9 @@ const register = async (req,res) => {
       createdAt: newAdmin.createdAt
     };
 
-    // Set cookies
-    const cookieOptions = {
-      path: "/",
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
-    };
 
-    res.cookie("accessToken", accessToken, cookieOptions);
-    res.cookie("refreshToken", refreshToken, cookieOptions);
+    res.cookie("accessToken", accessToken, cookieOption);
+    res.cookie("refreshToken", refreshToken, cookieOption);
 
     res.status(statusCodes.success).json({
       result: true,
