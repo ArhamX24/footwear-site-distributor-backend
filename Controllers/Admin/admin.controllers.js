@@ -804,9 +804,17 @@ const scanQRCode = async (req, res) => {
     const qrCode = await QRCode.findOne({ uniqueId });
 
     if (!qrCode) {
+      // Enhanced error message
+      const allQRs = await QRCode.find({}).limit(5).select('uniqueId articleName');
+      console.log('Available QR codes (sample):', allQRs);
+      
       return res.status(404).json({
         result: false,
-        message: "QR code not found or invalid QR"
+        message: `QR code with uniqueId '${uniqueId}' not found in database`,
+        debug: {
+          searchedId: uniqueId,
+          sampleValidIds: allQRs.map(q => q.uniqueId)
+        }
       });
     }
 
