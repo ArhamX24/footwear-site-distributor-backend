@@ -78,7 +78,119 @@ let cookieOption = {
     httpOnly: true,
     secure: true,
     sameSite: 'none'
-}
+  }
+
+// ✅ Generate clean QR with HTML labels (converted to image)
+const generateQRWithLabel = async (qrString, labelData) => {
+  try {
+    console.log('Generating QR with labels...');
+    
+    // ✅ First generate pure QR code
+    const qrCodeDataURL = await QRCodeLib.toDataURL(qrString, {
+      width: 200,
+      margin: 2,
+      color: { 
+        dark: '#000000',
+        light: '#FFFFFF'
+      },
+      errorCorrectionLevel: 'M'
+    });
+
+    // ✅ Format sizes properly
+    let sizesText = 'N/A';
+    if (labelData.sizes && Array.isArray(labelData.sizes)) {
+      if (labelData.sizes.length === 1) {
+        sizesText = labelData.sizes[0].toString();
+      } else if (labelData.sizes.length > 1) {
+        const sorted = [...labelData.sizes].sort((a, b) => a - b);
+        sizesText = `${sorted[0]}X${sorted[sorted.length - 1]}`;
+      }
+    } else if (labelData.sizes) {
+      sizesText = labelData.sizes.toString();
+    }
+
+    // ✅ Create canvas for combining QR with labels
+    const canvas = createCanvas(280, 350);
+    const ctx = canvas.getContext('2d');
+
+    // White background
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, 280, 350);
+
+    // ✅ Add labels at the top
+    ctx.fillStyle = '#000000';
+    ctx.font = 'bold 12px Arial';
+    ctx.textAlign = 'center';
+
+    let yPos = 20;
+    ctx.fillText(`Article: ${labelData.articleName}`, 140, yPos);
+    yPos += 18;
+    ctx.fillText(`Colors: ${labelData.colors}`, 140, yPos);
+    yPos += 18;
+    ctx.fillText(`Sizes: ${sizesText}`, 140, yPos);
+    yPos += 18;
+    ctx.fillText(`Carton No: ${labelData.cartonNo}`, 140, yPos);
+    yPos += 20;
+
+    // ✅ Add separator line
+    ctx.strokeStyle = '#cccccc';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(20, yPos);
+    ctx.lineTo(260, yPos);
+    ctx.stroke();
+    yPos += 15;
+
+    // ✅ Load and add QR code
+    const qrImage = await loadImage(qrCodeDataURL);
+    ctx.drawImage(qrImage, 40, yPos, 200, 200);
+    yPos += 210;
+
+    // ✅ Add footer text
+    ctx.font = '10px Arial';
+    ctx.fillStyle = '#666666';
+    ctx.fillText('Scan to track carton', 140, yPos);
+
+    // ✅ Convert to data URL
+    const finalImage = canvas.toDataURL('image/png');
+    console.log('✅ QR with labels generated successfully');
+    return finalImage;
+
+  } catch (error) {
+    console.error('Error generating QR with labels:', error);
+    // ✅ Fallback to pure QR
+    return await QRCodeLib.toDataURL(qrString, {
+      width: 200,
+      margin: 2,
+      color: { dark: '#000000', light: '#FFFFFF' },
+      errorCorrectionLevel: 'M'
+    });
+  }
+};
+
+
+// ✅ Helper function to format sizes as range (add this at the top of your file)
+const formatSizeRange = (sizes) => {
+  if (!sizes) return 'N/A';
+  
+  // Handle different input formats
+  let sizesArray = [];
+  if (Array.isArray(sizes)) {
+    sizesArray = sizes.map(s => parseInt(s)).filter(s => !isNaN(s));
+  } else if (typeof sizes === 'string') {
+    sizesArray = sizes.split(',').map(s => parseInt(s.trim())).filter(s => !isNaN(s));
+  } else if (typeof sizes === 'number') {
+    sizesArray = [sizes];
+  }
+  
+  if (sizesArray.length === 0) return 'N/A';
+  if (sizesArray.length === 1) return sizesArray[0].toString();
+  
+  const sortedSizes = [...sizesArray].sort((a, b) => a - b);
+  return `${sortedSizes[0]}X${sortedSizes[sortedSizes.length - 1]}`;
+};
+
+
 
 const register = async (req,res) => {
     try {
@@ -414,155 +526,114 @@ try {
   }
 }
 
+// Unified scan controller: uses only 'manufactured' | 'received' | 'shipped'
 const generateQRCodes = async (req, res) => {
   try {
     const { articleId, articleName, colors, sizes, numberOfQRs } = req.body;
     const userId = req.user?._id;
 
-    // Validate inputs
+    // Basic validation
     if (!articleId || !articleName || !colors || !sizes || !numberOfQRs) {
       return res.status(400).json({
         result: false,
-        message: 'All fields are required: articleId, articleName, colors, sizes, numberOfQRs'
+        message: 'All fields required'
       });
     }
 
-    if (numberOfQRs < 1 || numberOfQRs > 1000) {
-      return res.status(400).json({
-        result: false,
-        message: 'Number of QR codes must be between 1 and 1000'
-      });
-    }
-
-    // ✅ FIX: Use 'new' keyword with mongoose.Types.ObjectId
+    // Get article data
     const objectId = new mongoose.Types.ObjectId(articleId);
-
-    // ✅ Fetch article details from Product using articleId
     const articleData = await Product.aggregate([
       { $unwind: "$variants" },
       { $unwind: "$variants.articles" },
-      { $match: { "variants.articles._id": objectId } }, // ✅ Use the created objectId
-      {
-        $project: {
-          articleId: "$variants.articles._id",
-          articleName: "$variants.articles.name",
-          articleColors: "$variants.articles.colors",
-          articleSizes: "$variants.articles.sizes",
-          variantId: "$variants._id",
-          variantName: "$variants.name",
-          productId: "$_id",
-          segment: "$segment"
-        }
-      },
+      { $match: { "variants.articles._id": objectId } },
+      { $project: { 
+        articleId: "$variants.articles._id", 
+        articleName: "$variants.articles.name", 
+        productId: "$_id",
+        variantId: "$variants._id",
+        variantName: "$variants.name"
+      }},
       { $limit: 1 }
     ]);
 
-    if (!articleData || articleData.length === 0) {
-      return res.status(404).json({
-        result: false,
-        message: 'Article not found'
-      });
+    if (!articleData.length) {
+      return res.status(404).json({ result: false, message: 'Article not found' });
     }
 
     const article = articleData[0];
-    
-    // Convert arrays if strings
     const colorsArray = Array.isArray(colors) ? colors : [colors];
-    const sizesArray = Array.isArray(sizes) ? sizes : [sizes];
-    const sizesDisplay = sizesArray.join('X');
-
-    // Generate batch ID
-    const batchId = `BATCH_${Date.now()}_${userId}`;
+    const sizesArray = Array.isArray(sizes) ? sizes.map(s => parseInt(s)) : [parseInt(sizes)];
+    const batchId = `BATCH_${Date.now()}`;
     const qrCodes = [];
 
-    // Generate individual QR codes for each carton
+    // Generate QR codes with labels
     for (let i = 1; i <= numberOfQRs; i++) {
       const uniqueId = uuidv4();
 
-      // ✅ Enhanced QR payload with article context
-      const qrPayload = {
+      // ✅ QR data structure
+      const qrData = {
         uniqueId,
-        
-        // ✅ Add article reference with IDs
-        productReference: {
-          productId: article.productId.toString(),
-          variantId: article.variantId.toString(),
-          articleId: article.articleId.toString(),
-          variantName: article.variantName,
-          articleName: article.articleName,
-          segment: article.segment
-        },
-        
-        articleName: article.articleName,
-        
+        articleName,
         contractorInput: {
           articleName,
-          articleId: article.articleId.toString(), // ✅ Include in contractor input
           colors: colorsArray,
           sizes: sizesArray,
           cartonNumber: i,
           totalCartons: numberOfQRs
         },
-        
         batchId,
-        generatedAt: new Date().toISOString(),
-        status: 'generated',
-        
-        // Enhanced label data for display
-        labelData: {
-          articleName,
-          colors: colorsArray.join(', '),
-          sizes: sizesDisplay,
-          cartonNo: i
-        }
+        status: 'generated'
       };
 
-      const qrString = JSON.stringify(qrPayload);
+      const qrString = JSON.stringify(qrData);
 
-      // Generate QR code with label information
-      const qrCodeDataURL = await generateQRWithLabel(qrString, {
+      // ✅ Generate QR with labels on top
+      const qrCodeImage = await generateQRWithLabel(qrString, {
         articleName,
         colors: colorsArray.join(', '),
-        sizes: sizesDisplay,
+        sizes: sizesArray,
         cartonNo: i
       });
 
-      // ✅ Save to database with article context
+      // Save to DB
       const qrDoc = new QRCode({
         uniqueId,
-        articleName: article.articleName,
+        articleName,
         qrData: qrString,
-        qrImagePath: qrCodeDataURL,
+        qrImagePath: qrCodeImage,
         status: 'generated',
-
+        
         productReference: {
           productId: article.productId,
           variantId: article.variantId,
-          articleId: article.articleId, // ✅ Store article ID
+          articleId: article.articleId,
           variantName: article.variantName,
           articleName: article.articleName,
           isMatched: true,
           matchedBy: req.user?._id,
           matchedAt: new Date()
         },
-
-        batchInfo: {
-          contractorId: userId,
-          batchId
+        
+        batchInfo: { 
+          contractorId: userId, 
+          batchId 
         },
-
+        
         contractorInput: {
           articleName,
-          articleId: article.articleId, // ✅ Store article ID here too
-          color: colorsArray.join(', '),
-          size: sizesDisplay,
+          colors: colorsArray,
+          sizes: sizesArray,
           cartonNumber: i,
           totalCartons: numberOfQRs
         },
 
         manufacturingDetails: {
           manufacturedAt: new Date(),
-          manufacturedBy: { userId, userType: 'contractor', name: req.user.name }
+          manufacturedBy: { 
+            userId, 
+            userType: 'contractor', 
+            name: req.user?.name || 'Contractor'
+          }
         }
       });
 
@@ -570,18 +641,24 @@ const generateQRCodes = async (req, res) => {
 
       qrCodes.push({
         uniqueId,
-        qrCodeImage: qrCodeDataURL,
+        qrCodeImage,
         cartonNumber: i,
         batchId,
-        labelData: qrPayload.labelData
+        // ✅ Label info for frontend display
+        labelInfo: {
+          articleName,
+          colors: colorsArray.join(', '),
+          sizes: sizesArray.length === 1 ? sizesArray[0] : `${Math.min(...sizesArray)}X${Math.max(...sizesArray)}`,
+          cartonNo: i
+        }
       });
     }
 
-    res.status(200).json({
+    res.json({
       result: true,
-      message: `Successfully generated ${numberOfQRs} QR code labels for ${article.articleName}`,
-      data: {
-        batchId,
+      message: `Generated ${numberOfQRs} QR codes with labels`,
+      data: { 
+        batchId, 
         qrCodes,
         articleInfo: {
           articleId: article.articleId,
@@ -589,10 +666,8 @@ const generateQRCodes = async (req, res) => {
           productId: article.productId,
           variantId: article.variantId,
           variantName: article.variantName,
-          segment: article.segment,
           colors: colorsArray,
           sizes: sizesArray,
-          sizesDisplay: sizesDisplay,
           numberOfQRs
         }
       }
@@ -602,7 +677,203 @@ const generateQRCodes = async (req, res) => {
     console.error('Error generating QR codes:', error);
     res.status(500).json({
       result: false,
-      message: 'Failed to generate QR codes',
+      message: 'QR generation failed',
+      error: error.message
+    });
+  }
+};
+
+const scanQRCode = async (req, res) => {
+  try {
+    const { uniqueId } = req.params;
+    const {
+      scannedBy,
+      location,
+      event,
+      notes,
+      qualityCheck,
+      distributorDetails,
+      trackingNumber
+    } = req.body;
+
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({
+        result: false,
+        message: "User authentication required for scanning"
+      });
+    }
+
+    const qrCode = await QRCode.findOne({ uniqueId });
+
+    if (!qrCode) {
+      const allQRs = await QRCode.find({}).limit(5).select('uniqueId articleName status');
+      
+      return res.status(404).json({
+        result: false,
+        message: `QR code with uniqueId '${uniqueId}' not found in database`,
+        debug: {
+          searchedId: uniqueId,
+          sampleValidIds: allQRs.map(q => ({ id: q.uniqueId, status: q.status }))
+        }
+      });
+    }
+
+    if (!qrCode.articleName && qrCode.contractorInput?.articleName) {
+      qrCode.articleName = qrCode.contractorInput.articleName;
+    }
+
+    const allowedEvents = new Set(['received', 'shipped']);
+    if (!allowedEvents.has(event)) {
+      return res.status(400).json({
+        result: false,
+        message: "Invalid event. Only 'received' and 'shipped' are allowed"
+      });
+    }
+
+    const scans = qrCode.scans || [];
+    const hasReceived = scans.some(s => s.event === 'received') || qrCode.status === 'received';
+    const hasShipped = scans.some(s => s.event === 'shipped') || qrCode.status === 'shipped';
+
+    if (event === 'received' && hasReceived) {
+      return res.status(400).json({
+        result: false,
+        message: "This carton has already been received at warehouse"
+      });
+    }
+
+    if (event === 'shipped') {
+      if (!hasReceived) {
+        return res.status(400).json({
+          result: false,
+          message: "Cannot ship a carton that hasn't been received at warehouse yet"
+        });
+      }
+      if (hasShipped) {
+        return res.status(400).json({
+          result: false,
+          message: "This carton has already been shipped"
+        });
+      }
+    }
+
+    const scanRecord = {
+      scannedAt: new Date(),
+      scannedBy: req.user._id,
+      event,
+      notes: notes || '',
+      location: location || 'Main Warehouse',
+      qualityCheck: qualityCheck || { passed: true, notes: '' }
+    };
+
+    qrCode.scans.push(scanRecord);
+    qrCode.totalScans = (qrCode.totalScans || 0) + 1;
+    if (!qrCode.firstScannedAt) qrCode.firstScannedAt = new Date();
+    qrCode.lastScannedAt = new Date();
+
+    if (event === 'received') {
+      qrCode.status = 'received';
+      qrCode.warehouseDetails = {
+        receivedAt: new Date(),
+        receivedBy: {
+          userId: req.user._id,
+          userType: 'warehouse_inspector',
+          name: req.user.name || 'Warehouse Inspector'
+        },
+        conditionOnReceipt: qualityCheck?.passed ? 'good' : 'damaged',
+        location: location || 'Main Warehouse',
+        notes: notes || ''
+      };
+
+      try {
+        await updateInventoryFromQRScan(qrCode, req.user, qualityCheck, notes);
+      } catch (inventoryError) {
+        console.warn('Inventory update failed on receive:', inventoryError.message);
+      }
+
+      await qrCode.save();
+
+      return res.status(200).json({
+        result: true,
+        message: "Warehouse receipt scan completed successfully",
+        data: {
+          qrCode: {
+            uniqueId: qrCode.uniqueId,
+            articleName: qrCode.articleName,
+            status: qrCode.status,
+            currentStage: 'in_warehouse',
+            nextStage: 'shipment'
+          },
+          scanDetails: scanRecord
+        }
+      });
+    }
+
+    if (event === 'shipped') {
+      qrCode.status = 'shipped';
+      qrCode.shipmentDetails = {
+        shippedAt: new Date(),
+        shippedBy: {
+          userId: req.user._id,
+          userType: 'shipment_manager',
+          name: req.user.name || 'Shipment Manager'
+        },
+        distributorId: distributorDetails?.distributorId,
+        distributorName: distributorDetails?.distributorName,
+        trackingNumber,
+        notes: notes || ''
+      };
+
+      try {
+        const shipment = await updateInventoryOnShipment(qrCode, req.user, distributorDetails);
+        await qrCode.save();
+
+        return res.status(200).json({
+          result: true,
+          message: "Shipment scan completed successfully",
+          data: {
+            qrCode: {
+              uniqueId: qrCode.uniqueId,
+              articleName: qrCode.articleName,
+              status: qrCode.status,
+              currentStage: 'shipped',
+              nextStage: 'delivered'
+            },
+            shipmentDetails: {
+              shipmentId: shipment?.shipmentId,
+              distributorName: qrCode.shipmentDetails.distributorName,
+              trackingNumber,
+              shippedAt: qrCode.shipmentDetails.shippedAt
+            },
+            scanDetails: scanRecord
+          }
+        });
+      } catch (shipmentError) {
+        return res.status(500).json({
+          result: false,
+          message: "Failed to process shipment",
+          error: shipmentError.message
+        });
+      }
+    }
+
+    await qrCode.save();
+    return res.status(200).json({
+      result: true,
+      message: "QR code scanned successfully",
+      data: {
+        qrCode: {
+          uniqueId: qrCode.uniqueId,
+          articleName: qrCode.articleName,
+          status: qrCode.status
+        },
+        scanDetails: scanRecord
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      result: false,
+      message: "Failed to process QR code scan",
       error: error.message
     });
   }
@@ -674,108 +945,6 @@ const downloadQRCodes = async (req, res) => {
       }
     });
 
-    // Enhanced informational text file
-    const infoContent = `QR Code Batch Information
-========================
-Batch ID: ${batchId || 'N/A'}
-Article Name: ${articleInfo?.savedAsArticleName || 'N/A'}
-Contractor Input: ${articleInfo?.contractorInput || 'N/A'}
-Match Type: ${articleInfo?.matchType || 'N/A'}
-Match Confidence: ${articleInfo?.confidence || 'N/A'}%
-Is New Article: ${articleInfo?.isNewArticle ? 'Yes' : 'No'}
-Total Cartons: ${qrCodes.length}
-Generated On: ${new Date().toISOString()}
-${articleInfo?.needsAdminValidation ? 'REQUIRES ADMIN VALIDATION' : 'VALIDATED'}
-
-Product Details:
-===============
-Product ID: ${articleInfo?.productId || 'N/A'}
-Variant: ${articleInfo?.variantName || 'N/A'}
-Segment: ${articleInfo?.segment || 'N/A'}
-Colors: ${Array.isArray(articleInfo?.colors) ? articleInfo.colors.join(', ') : 'N/A'}
-Sizes: ${Array.isArray(articleInfo?.sizes) ? articleInfo.sizes.join(', ') : 'N/A'}
-
-Lifecycle Stages:
-================
-1. GENERATED - QR codes created by contractor ✅
-2. MANUFACTURED - Scan when product manufacturing is complete
-3. RECEIVED - Scan when received at warehouse
-4. SHIPPED - Scan when shipped to distributor
-
-QR Code Details:
-================
-${qrCodes.map((qr, idx) => {
-      let qrData = {};
-      try {
-        qrData = JSON.parse(qr.qrData);
-      } catch (e) { 
-        console.log('Error parsing QR data:', e);
-      }
-      
-      return `Carton #${qr.cartonNumber || idx + 1}:
-  Unique ID: ${qr.uniqueId}
-  Carton: ${qr.cartonNumber} of ${qrData.contractorInput?.totalCartons || qrCodes.length}
-  Status: ${qrData.status || 'generated'}
-  Generated At: ${qrData.generatedAt || 'N/A'}
-  Scan URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}/scan/${qr.uniqueId}
-${'='.repeat(60)}`;
-    }).join('\n\n')}
-
-Scanning Instructions:
-=====================
-1. Use QR scanner app or camera to scan codes
-2. Each scan updates the carton status in real-time
-3. Track cartons through: Generated → Manufactured → Received → Shipped
-4. Use Unique ID for manual lookup if needed
-
-Quality Control:
-===============
-- Each carton has individual tracking
-- Batch grouping for easy management
-- Real-time status updates
-- Full audit trail maintained
-
-Support Information:
-===================
-For technical support, contact system administrator.
-Batch ID: ${batchId}
-Generated: ${new Date().toLocaleString()}
-`;
-
-    archive.append(infoContent, { name: 'QR_Batch_Information.txt' });
-
-    // Add a PDF receipt-style summary
-    const receiptContent = `
-===============================================
-        QR CODE BATCH RECEIPT
-===============================================
-
-Batch ID: ${batchId}
-Date: ${new Date().toLocaleString()}
-
-Article: ${articleInfo?.savedAsArticleName || 'N/A'}
-Input: ${articleInfo?.contractorInput || 'N/A'}
-${articleInfo?.matchType === 'fuzzy' ? `(Auto-corrected from "${articleInfo.contractorInput}")` : ''}
-${articleInfo?.isNewArticle ? '⚠️  NEW ARTICLE CREATED' : ''}
-
-Cartons Generated: ${qrCodes.length}
-Colors: ${Array.isArray(articleInfo?.colors) ? articleInfo.colors.join(', ') : 'N/A'}
-Sizes: ${Array.isArray(articleInfo?.sizes) ? articleInfo.sizes.join(', ') : 'N/A'}
-
-Status: ${articleInfo?.needsAdminValidation ? '⏳ PENDING VALIDATION' : '✅ VALIDATED'}
-
-Next Steps:
-- Print and attach QR codes to cartons
-- Scan during manufacturing process
-- Track through warehouse and shipment
-
-===============================================
-    For support: Contact System Administrator
-===============================================
-`;
-
-    archive.append(receiptContent, { name: 'Batch_Receipt.txt' });
-
     await archive.finalize();
 
   } catch (error) {
@@ -786,207 +955,6 @@ Next Steps:
     });
   }
 };
-
-// Unified scan controller: uses only 'manufactured' | 'received' | 'shipped'
-const scanQRCode = async (req, res) => {
-  try {
-    const { uniqueId } = req.params;
-    const {
-      scannedBy,
-      location,
-      event,
-      notes,
-      qualityCheck,
-      distributorDetails, // { distributorId, distributorName }
-      trackingNumber
-    } = req.body;
-
-    const qrCode = await QRCode.findOne({ uniqueId });
-
-    if (!qrCode) {
-      // Enhanced error message
-      const allQRs = await QRCode.find({}).limit(5).select('uniqueId articleName');
-      console.log('Available QR codes (sample):', allQRs);
-      
-      return res.status(404).json({
-        result: false,
-        message: `QR code with uniqueId '${uniqueId}' not found in database`,
-        debug: {
-          searchedId: uniqueId,
-          sampleValidIds: allQRs.map(q => q.uniqueId)
-        }
-      });
-    }
-
-    // Ensure articleName is set
-    if (!qrCode.articleName && qrCode.contractorInput?.articleName) {
-      qrCode.articleName = qrCode.contractorInput.articleName;
-    }
-
-    // ✅ ONLY accept 'received' and 'shipped' events
-    const allowedEvents = new Set(['received', 'shipped']);
-    if (!allowedEvents.has(event)) {
-      return res.status(400).json({
-        result: false,
-        message: "Invalid event. Only 'received' and 'shipped' are allowed"
-      });
-    }
-
-    const scans = qrCode.scans || [];
-    const hasReceived = scans.some(s => s.event === 'received') || qrCode.status === 'received';
-    const hasShipped = scans.some(s => s.event === 'shipped') || qrCode.status === 'shipped';
-
-    // Validation logic
-    if (event === 'received' && hasReceived) {
-      return res.status(400).json({
-        result: false,
-        message: "This carton has already been received at warehouse"
-      });
-    }
-
-    if (event === 'shipped') {
-      if (!hasReceived) {
-        return res.status(400).json({
-          result: false,
-          message: "Cannot ship a carton that hasn't been received at warehouse yet"
-        });
-      }
-      if (hasShipped) {
-        return res.status(400).json({
-          result: false,
-          message: "This carton has already been shipped"
-        });
-      }
-    }
-
-    // Create scan record
-    const scanRecord = {
-      scannedAt: new Date(),
-      scannedBy: req.user?._id,
-      event,
-      notes: notes || '',
-      location: location || 'Main Warehouse',
-      qualityCheck: qualityCheck || { passed: true, notes: '' }
-    };
-
-    qrCode.scans.push(scanRecord);
-    qrCode.totalScans = (qrCode.totalScans || 0) + 1;
-    if (!qrCode.firstScannedAt) qrCode.firstScannedAt = new Date();
-    qrCode.lastScannedAt = new Date();
-
-    // ✅ Handle Warehouse Receipt (received)
-    if (event === 'received') {
-      qrCode.status = 'received';
-      qrCode.warehouseDetails = {
-        receivedAt: new Date(),
-        receivedBy: {
-          userId: req.user?._id,
-          userType: 'warehouse_inspector',
-          name: req.user?.name || 'Warehouse Inspector'
-        },
-        conditionOnReceipt: qualityCheck?.passed ? 'good' : 'damaged',
-        location: location || 'Main Warehouse',
-        notes: notes || ''
-      };
-
-      try {
-        await updateInventoryFromQRScan(qrCode, req.user, qualityCheck, notes);
-      } catch (inventoryError) {
-        console.warn('Inventory update failed on receive:', inventoryError.message);
-      }
-
-      await qrCode.save();
-
-      return res.status(200).json({
-        result: true,
-        message: "Warehouse receipt scan completed successfully",
-        data: {
-          qrCode: {
-            uniqueId: qrCode.uniqueId,
-            articleName: qrCode.articleName,
-            status: qrCode.status,
-            currentStage: 'in_warehouse',
-            nextStage: 'shipment'
-          },
-          scanDetails: scanRecord
-        }
-      });
-    }
-
-    // ✅ Handle Shipment (shipped)
-    if (event === 'shipped') {
-      qrCode.status = 'shipped';
-      qrCode.shipmentDetails = {
-        shippedAt: new Date(),
-        shippedBy: {
-          userId: req.user?._id,
-          userType: 'shipment_manager',
-          name: req.user?.name || 'Shipment Manager'
-        },
-        distributorId: distributorDetails?.distributorId,
-        distributorName: distributorDetails?.distributorName,
-        trackingNumber,
-        notes: notes || ''
-      };
-
-      try {
-        const shipment = await updateInventoryOnShipment(qrCode, req.user, distributorDetails);
-        await qrCode.save();
-
-        return res.status(200).json({
-          result: true,
-          message: "Shipment scan completed successfully",
-          data: {
-            qrCode: {
-              uniqueId: qrCode.uniqueId,
-              articleName: qrCode.articleName,
-              status: qrCode.status,
-              currentStage: 'shipped',
-              nextStage: 'delivered'
-            },
-            shipmentDetails: {
-              shipmentId: shipment?.shipmentId,
-              distributorName: qrCode.shipmentDetails.distributorName,
-              trackingNumber,
-              shippedAt: qrCode.shipmentDetails.shippedAt
-            },
-            scanDetails: scanRecord
-          }
-        });
-      } catch (shipmentError) {
-        return res.status(500).json({
-          result: false,
-          message: "Failed to process shipment",
-          error: shipmentError.message
-        });
-      }
-    }
-
-    // Fallback (should not reach here)
-    await qrCode.save();
-    return res.status(200).json({
-      result: true,
-      message: "QR code scanned successfully",
-      data: {
-        qrCode: {
-          uniqueId: qrCode.uniqueId,
-          articleName: qrCode.articleName,
-          status: qrCode.status
-        },
-        scanDetails: scanRecord
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      result: false,
-      message: "Failed to process QR code scan",
-      error: error.message
-    });
-  }
-};
-
-
-
 
 // ✅ Updated inventory function for your workflow
 // ✅ Updated inventory function for your workflow
@@ -1359,390 +1327,6 @@ const generateShipmentReceipt = async (req, res) => {
         message: 'Failed to generate PDF receipt',
         error: error.message
       });
-    }
-  }
-};
-
-
-
-
-const generateQRWithLabel = async (qrString, labelData) => {
-  try {
-    // ✅ Generate base QR code with improved settings for scanning reliability
-    const qrCodeDataURL = await QRCodeLib.toDataURL(qrString, {
-      width: 320,           // ✅ Increased size for better scanning
-      margin: 4,            // ✅ CRITICAL: 4+ module quiet zone (was 2)
-      color: { 
-        dark: '#000000',    // Pure black
-        light: '#FFFFFF'    // Pure white
-      },
-      errorCorrectionLevel: 'Q'  // ✅ CRITICAL: Higher error correction (was 'M')
-    });
-
-    // ✅ Create canvas with proper proportions
-    const canvas = createCanvas(450, 650); // Slightly taller for better layout
-    const ctx = canvas.getContext('2d');
-
-    // White background
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(0, 0, 450, 650);
-
-    // ✅ Add label information on top with proper spacing from QR quiet zone
-    ctx.fillStyle = '#000000';
-    ctx.font = 'bold 16px Arial';  // Slightly smaller for better fit
-    ctx.textAlign = 'center';
-
-    let yPos = 30;
-    ctx.fillText(`Article: ${labelData.articleName}`, 225, yPos);
-    yPos += 25;
-    ctx.fillText(`Colors: ${labelData.colors}`, 225, yPos);
-    yPos += 25;
-    ctx.fillText(`Sizes: ${labelData.sizes}`, 225, yPos);
-    yPos += 25;
-    ctx.fillText(`Carton No: ${labelData.cartonNo}`, 225, yPos);
-
-    // Add separator line with proper spacing from QR
-    yPos += 35;  // ✅ More space before QR code
-    ctx.strokeStyle = '#cccccc';  // Lighter line to avoid interfering with QR
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(75, yPos);
-    ctx.lineTo(375, yPos);
-    ctx.stroke();
-
-    // ✅ Position QR code with adequate spacing (respects quiet zone)
-    const qrImage = await loadImage(qrCodeDataURL);
-    const qrYPos = yPos + 40;  // ✅ Sufficient space from separator
-    
-    // ✅ Center QR code and ensure no overlap with labels
-    ctx.drawImage(qrImage, 65, qrYPos, 320, 320);  // Matches generated width
-
-    // ✅ Add scanning instructions below QR (outside quiet zone)
-    ctx.font = '12px Arial';
-    ctx.fillStyle = '#666666';
-    const instructionYPos = qrYPos + 340;
-    ctx.fillText('Scan to track carton through warehouse', 225, instructionYPos);
-    
-    // ✅ Add unique ID for manual reference
-    ctx.font = '10px monospace';
-    ctx.fillStyle = '#999999';
-    const uniqueIdText = `ID: ${qrString.includes('uniqueId') ? 
-      JSON.parse(qrString).uniqueId.substring(0, 8) + '...' : 
-      qrString.substring(0, 12)}`;
-    ctx.fillText(uniqueIdText, 225, instructionYPos + 20);
-
-    // Convert canvas to data URL
-    return canvas.toDataURL('image/png');
-
-  } catch (error) {
-    console.error('Error generating QR with label:', error);
-    
-    // ✅ Improved fallback with same critical settings
-    return await QRCodeLib.toDataURL(qrString, {
-      width: 320,
-      margin: 4,            // ✅ Keep 4+ module margin in fallback
-      color: { dark: '#000000', light: '#FFFFFF' },
-      errorCorrectionLevel: 'Q'  // ✅ Keep higher error correction
-    });
-  }
-};
-
-
-
-
-const generateReceiptPdf = async (req, res) => {
-  try {
-    const { qrCodes, articleInfo } = req.body;
-    const contractorInfo = req.user; // ✅ Get contractor info from authenticated user
-    if (!qrCodes || qrCodes.length === 0) {
-      return res.status(400).json({
-        result: false,
-        message: 'No QR codes provided for receipt'
-      });
-    }
-
-    if (!articleInfo) {
-      return res.status(400).json({
-        result: false,
-        message: 'Article info is required'
-      });
-    }
-
-    // Create PDF document
-    const doc = new PDFDocument({ size: 'A4', margin: 50 });
-
-    // Set response headers
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader(
-      'Content-Disposition', 
-      `attachment; filename=QR_Receipt_${articleInfo.savedAsArticleName.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.pdf`
-    );
-
-    // Pipe PDF to response
-    doc.pipe(res);
-
-    // ✅ Header
-    doc.fontSize(22).text('QR Code Generation Receipt', { align: 'center' });
-    doc.moveDown(1.5);
-
-    // ✅ Contractor Details Section (Fixed positioning)
-    const contractorBoxY = doc.y;
-    doc.rect(50, contractorBoxY, 500, 60).stroke();
-    doc.fontSize(16).text('Contractor Details', 60, contractorBoxY + 10);
-    doc.fontSize(12)
-       .text(`Name: ${contractorInfo.name || 'N/A'}`, 60, contractorBoxY + 30)
-       .text(`Phone No: ${contractorInfo.phoneNo || 'N/A'}`, 60, contractorBoxY + 45);
-    
-    // Move cursor after contractor box
-    doc.y = contractorBoxY + 70;
-    doc.moveDown(1);
-
-    // ✅ Article Details Section (Fixed positioning and data access)
-    const articleBoxY = doc.y;
-    doc.rect(50, articleBoxY, 500, 100).stroke();
-    doc.fontSize(16).text('Article Details', 60, articleBoxY + 10);
-    
-    // ✅ Fixed data access and size formatting
-    const articleName = articleInfo.savedAsArticleName || articleInfo.contractorInput || 'N/A';
-    const colors = Array.isArray(articleInfo.colors) ? articleInfo.colors.join(', ') : (articleInfo.colors || 'N/A');
-    
-    // ✅ Fixed size display (only first X last)
-    let sizesDisplay = 'N/A';
-    if (articleInfo.sizes && Array.isArray(articleInfo.sizes)) {
-      if (articleInfo.sizes.length === 1) {
-        sizesDisplay = articleInfo.sizes[0];
-      } else if (articleInfo.sizes.length > 1) {
-        sizesDisplay = `${articleInfo.sizes[0]}X${articleInfo.sizes[articleInfo.sizes.length - 1]}`;
-      }
-    }
-    
-    doc.fontSize(12)
-       .text(`Article Name: ${articleName}`, 60, articleBoxY + 30)
-       .text(`Colors: ${colors}`, 60, articleBoxY + 45)
-       .text(`Sizes: ${sizesDisplay}`, 60, articleBoxY + 60)
-       .text(`Number of Cartons: ${articleInfo.numberOfQRs || qrCodes.length}`, 60, articleBoxY + 75);
-
-    // Move cursor after article box
-    doc.y = articleBoxY + 110;
-    doc.moveDown(1);
-
-    // ✅ Generation Info
-    doc.fontSize(10)
-       .text(`Generated on: ${new Date().toLocaleString()}`, 50)
-       .text(`Batch ID: ${qrCodes[0]?.batchId || 'N/A'}`, 50);
-
-    doc.moveDown(2);
-
-    // ✅ Footer
-    doc.fontSize(10).text(
-      'This receipt confirms the generation of QR codes for the specified article batch.',
-      50,
-      doc.page.height - 100,
-      { 
-        align: 'center',
-        width: 500
-      }
-    );
-
-    // Finalize PDF
-    doc.end();
-
-  } catch (error) {
-    res.status(500).json({
-      result: false,
-      message: 'Failed to generate receipt PDF',
-      error: error.message
-    });
-  }
-};
-
-const generateShipmentReceiptPDF = async (req, res) => {
-  try {
-    const { 
-      shipmentId, 
-      distributorName, 
-      totalCartons, 
-      shippedAt, 
-      items 
-    } = req.body;
-
-    // ✅ Create PDF document
-    const doc = new PDFDocument({ 
-      size: 'A4',
-      margin: 50 
-    });
-
-    // ✅ Set response headers for PDF download
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="Shipment_${shipmentId}_Receipt.pdf"`);
-
-    // ✅ Pipe PDF to response
-    doc.pipe(res);
-
-    // Header Section
-    doc.fontSize(24)
-       .fillColor('#2563eb')
-       .text('📦 SHIPMENT RECEIPT', 50, 50, { align: 'center' });
-
-    doc.fontSize(12)
-       .fillColor('#666666')
-       .text('Official Shipping Documentation', 50, 80, { align: 'center' });
-
-    // Draw header line
-    doc.strokeColor('#2563eb')
-       .lineWidth(3)
-       .moveTo(50, 100)
-       .lineTo(545, 100)
-       .stroke();
-
-    // Company Info Section
-    doc.fontSize(16)
-       .fillColor('#1f2937')
-       .text('Warehouse Management System', 50, 130);
-
-    doc.fontSize(10)
-       .fillColor('#666666')
-       .text('Address: Main Warehouse Facility', 50, 150)
-       .text('Phone: +91 XXXXX XXXXX', 50, 165)
-       .text('Email: warehouse@company.com', 50, 180);
-
-    // Shipment Details Box
-    doc.rect(50, 220, 245, 140)
-       .fillAndStroke('#f9fafb', '#e5e7eb');
-
-    doc.fontSize(14)
-       .fillColor('#1f2937')
-       .text('📋 Shipment Details', 60, 235);
-
-    doc.fontSize(10)
-       .fillColor('#4b5563')
-       .text(`Shipment ID: ${shipmentId}`, 60, 255)
-       .text(`Date: ${new Date(shippedAt).toLocaleDateString()}`, 60, 270)
-       .text(`Time: ${new Date(shippedAt).toLocaleTimeString()}`, 60, 285)
-       .text(`Status: SHIPPED`, 60, 300)
-       .text(`Total Cartons: ${totalCartons}`, 60, 315)
-       .text(`Shipped By: ${req.user?.name || 'Shipment Manager'}`, 60, 330);
-
-    // Distributor Details Box
-    doc.rect(300, 220, 245, 140)
-       .fillAndStroke('#f9fafb', '#e5e7eb');
-
-    doc.fontSize(14)
-       .fillColor('#1f2937')
-       .text('🏢 Distributor Information', 310, 235);
-
-    doc.fontSize(10)
-       .fillColor('#4b5563')
-       .text(`Company: ${distributorName}`, 310, 255)
-       .text('Contact: +91 XXXXX XXXXX', 310, 270)
-       .text('Email: distributor@email.com', 310, 285)
-       .text('Address: Distributor Address', 310, 300)
-       .text('Transport: Road Transport', 310, 315)
-       .text('City: Mumbai', 310, 330);
-
-    // Items Table Header
-    doc.fontSize(16)
-       .fillColor('#1f2937')
-       .text('📦 Shipped Items', 50, 390);
-
-    // Table Header Background
-    doc.rect(50, 420, 495, 25)
-       .fillAndStroke('#2563eb', '#2563eb');
-
-    doc.fontSize(10)
-       .fillColor('white')
-       .text('#', 60, 430, { width: 30 })
-       .text('Article Name', 100, 430, { width: 140 })
-       .text('Colors', 250, 430, { width: 80 })
-       .text('Sizes', 340, 430, { width: 60 })
-       .text('Carton #', 410, 430, { width: 60 })
-       .text('Status', 480, 430, { width: 65 });
-
-    // Table Rows
-    let yPosition = 450;
-    const maxItemsPerPage = 15;
-    
-    items.slice(0, maxItemsPerPage).forEach((item, index) => {
-      // Alternate row colors
-      if (index % 2 === 0) {
-        doc.rect(50, yPosition - 5, 495, 20)
-           .fillAndStroke('#f9fafb', '#f9fafb');
-      }
-
-      doc.fillColor('#1f2937')
-         .text((index + 1).toString(), 60, yPosition, { width: 30 })
-         .text(item.articleName || 'Unknown', 100, yPosition, { width: 140 })
-         .text(Array.isArray(item.colors) ? 
-               item.colors.join(', ') : 
-               item.colors || 'N/A', 250, yPosition, { width: 80 })
-         .text(Array.isArray(item.sizes) ? 
-               item.sizes.join(', ') : 
-               item.sizes || 'N/A', 340, yPosition, { width: 60 })
-         .text(`#${item.cartonNumber || index + 1}`, 410, yPosition, { width: 60 })
-         .text('SHIPPED', 480, yPosition, { width: 65 });
-
-      yPosition += 20;
-    });
-
-    // Add overflow indicator if there are more items
-    if (items.length > maxItemsPerPage) {
-      doc.fontSize(10)
-         .fillColor('#6b7280')
-         .text(`... and ${items.length - maxItemsPerPage} more items`, 60, yPosition + 10, { style: 'italic' });
-      yPosition += 30;
-    }
-
-    // Summary Section
-    const summaryY = yPosition + 30;
-    doc.rect(50, summaryY, 495, 100)
-       .fillAndStroke('#f0f9ff', '#bae6fd');
-
-    doc.fontSize(14)
-       .fillColor('#1e40af')
-       .text('📊 Shipment Summary', 60, summaryY + 15);
-
-    const uniqueArticles = [...new Set(items.map(item => item.articleName))].filter(Boolean);
-    const estimatedWeight = totalCartons * 2; // 2kg per carton estimate
-
-    doc.fontSize(10)
-       .fillColor('#1e40af')
-       .text(`Total Items Shipped: ${items.length} Items`, 60, summaryY + 35)
-       .text(`Total Cartons: ${totalCartons}`, 60, summaryY + 50)
-       .text(`Unique Articles: ${uniqueArticles.length}`, 60, summaryY + 65)
-       .text(`Estimated Weight: ${estimatedWeight} kg`, 300, summaryY + 35)
-       .text(`Shipment Status: SHIPPED`, 300, summaryY + 50)
-       .text(`Generated: ${new Date().toLocaleDateString()}`, 300, summaryY + 65);
-
-    // Footer
-    const footerY = summaryY + 120;
-    doc.fontSize(10)
-       .fillColor('#6b7280')
-       .text('Contact Information: warehouse@company.com | +91 XXXXX XXXXX', 50, footerY, { align: 'center' })
-       .text('Warehouse Management System', 50, footerY + 15, { align: 'center' })
-       .text(`Receipt generated on ${new Date().toLocaleString()}`, 50, footerY + 35, { align: 'center' })
-       .text('This is a computer-generated document and does not require a signature.', 50, footerY + 50, { align: 'center', style: 'italic' });
-
-    // Add QR tracking info footer
-    doc.fontSize(8)
-       .fillColor('#9ca3af')
-       .text(`Tracking: Use shipment ID ${shipmentId} for status updates`, 50, footerY + 70, { align: 'center' });
-
-    // ✅ Finalize the PDF
-    doc.end();
-
-  } catch (error) {
-    console.error('Error generating PDF receipt:', error);
-    
-    // If response headers haven't been sent yet, send JSON error
-    if (!res.headersSent) {
-      res.status(500).json({
-        result: false,
-        message: 'Failed to generate PDF receipt',
-        error: error.message
-      });
-    } else {
-      // If we're already streaming PDF, we can't send JSON
-      console.error('PDF generation failed mid-stream:', error.message);
     }
   }
 };
@@ -2501,18 +2085,24 @@ const addDistributor = async (req, res) => {
 // Add this function to your backend
 const createOrUpdateShipment = async (qrCode, user, distributorDetails) => {
   try {
-
-    
     const shipmentId = `SHIP_${Date.now()}_${distributorDetails.distributorId.slice(-6)}`;
 
-    // ✅ Create new item for shipment
+    // ✅ Helper function to format sizes as range
+    const formatSizeRange = (sizes) => {
+      if (!sizes || sizes.length === 0) return 'N/A';
+      if (sizes.length === 1) return sizes[0].toString();
+      const sortedSizes = [...sizes].sort((a, b) => a - b);
+      return `${sortedSizes[0]}X${sortedSizes[sortedSizes.length - 1]}`;
+    };
+
+    // ✅ Create new item for shipment with proper data structure
     const newItem = {
       qrCodeId: qrCode._id,
       uniqueId: qrCode.uniqueId,
       articleName: qrCode.articleName || qrCode.contractorInput?.articleName,
       articleDetails: {
-        color: qrCode.contractorInput?.color || 'Unknown',
-        size: qrCode.contractorInput?.size || 'Unknown', 
+        colors: qrCode.contractorInput?.colors || ['Unknown'], // ✅ Array
+        sizes: qrCode.contractorInput?.sizes || [0], // ✅ Array of numbers
         numberOfCartons: qrCode.contractorInput?.totalCartons || 1
       },
       manufacturedAt: qrCode.manufacturingDetails?.manufacturedAt || null,
@@ -2521,14 +2111,13 @@ const createOrUpdateShipment = async (qrCode, user, distributorDetails) => {
       trackingNumber: `TRACK_${Date.now()}`
     };
 
-    // ✅ FIXED: Use valid enum value for status
     const shipmentData = {
       shipmentId,
       distributorId: distributorDetails.distributorId,
       distributorName: distributorDetails.distributorName,
       shippedBy: user._id,
       shippedAt: new Date(),
-      status: 'active', // ✅ Valid enum value
+      status: 'active',
       items: [newItem],
       totalCartons: 1
     };
@@ -2542,22 +2131,19 @@ const createOrUpdateShipment = async (qrCode, user, distributorDetails) => {
     let existingShipment = await Shipment.findOne({
       distributorId: distributorDetails.distributorId,
       shippedAt: { $gte: today, $lt: tomorrow },
-      status: 'active' // ✅ Use valid enum value
+      status: 'active'
     });
 
     let shipment;
     if (existingShipment) {
-      // Add item to existing shipment
       existingShipment.items.push(newItem);
       existingShipment.totalCartons = existingShipment.items.length;
       shipment = await existingShipment.save();
     } else {
-      // Create new shipment
       const newShipment = new Shipment(shipmentData);
       shipment = await newShipment.save();
     }
 
-    // ✅ CRITICAL: Manually update inventory after shipment creation
     await updateInventoryAfterShipment(qrCode);
 
     return shipment;
@@ -2961,6 +2547,388 @@ const getInventoryByArticleId = async (req, res) => {
   }
 };
 
+const generateReceiptPdf = async (req, res) => {
+  try {
+    const { qrCodes, articleInfo } = req.body;
+    const contractorInfo = req.user; // ✅ Get contractor info from authenticated user
+    
+    if (!qrCodes || qrCodes.length === 0) {
+      return res.status(400).json({
+        result: false,
+        message: 'No QR codes provided for receipt'
+      });
+    }
+
+    if (!articleInfo) {
+      return res.status(400).json({
+        result: false,
+        message: 'Article info is required'
+      });
+    }
+
+    // Create PDF document
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+
+    // Set response headers
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition', 
+      `attachment; filename=QR_Receipt_${articleInfo.savedAsArticleName.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.pdf`
+    );
+
+    // Pipe PDF to response
+    doc.pipe(res);
+
+    // ✅ Header
+    doc.fontSize(22).text('QR Code Generation Receipt', { align: 'center' });
+    doc.moveDown(1.5);
+
+    // ✅ Contractor Details Section (Fixed positioning)
+    const contractorBoxY = doc.y;
+    doc.rect(50, contractorBoxY, 500, 60).stroke();
+    doc.fontSize(16).text('Contractor Details', 60, contractorBoxY + 10);
+    doc.fontSize(12)
+       .text(`Name: ${contractorInfo.name || 'N/A'}`, 60, contractorBoxY + 30)
+       .text(`Phone No: ${contractorInfo.phoneNo || 'N/A'}`, 60, contractorBoxY + 45);
+    
+    // Move cursor after contractor box
+    doc.y = contractorBoxY + 70;
+    doc.moveDown(1);
+
+    // ✅ Article Details Section (Fixed positioning and data access)
+    const articleBoxY = doc.y;
+    doc.rect(50, articleBoxY, 500, 100).stroke();
+    doc.fontSize(16).text('Article Details', 60, articleBoxY + 10);
+    
+    // ✅ Fixed data access and size formatting
+    const articleName = articleInfo.savedAsArticleName || articleInfo.contractorInput || 'N/A';
+    const colors = Array.isArray(articleInfo.colors) ? articleInfo.colors.join(', ') : (articleInfo.colors || 'N/A');
+    
+    // ✅ Use helper function to format sizes as range (3X6 format)
+    const sizesDisplay = formatSizeRange(articleInfo.sizes);
+    
+    doc.fontSize(12)
+       .text(`Article Name: ${articleName}`, 60, articleBoxY + 30)
+       .text(`Colors: ${colors}`, 60, articleBoxY + 45)
+       .text(`Sizes: ${sizesDisplay}`, 60, articleBoxY + 60) // ✅ Now shows 3X6 format
+       .text(`Number of Cartons: ${articleInfo.numberOfQRs || qrCodes.length}`, 60, articleBoxY + 75);
+
+    // Move cursor after article box
+    doc.y = articleBoxY + 110;
+    doc.moveDown(1);
+
+    // ✅ Generation Info
+    doc.fontSize(10)
+       .text(`Generated on: ${new Date().toLocaleString()}`, 50)
+       .text(`Batch ID: ${qrCodes[0]?.batchId || 'N/A'}`, 50);
+
+    doc.moveDown(2);
+
+    // ✅ Footer
+    doc.fontSize(10).text(
+      'This receipt confirms the generation of QR codes for the specified article batch.',
+      50,
+      doc.page.height - 100,
+      { 
+        align: 'center',
+        width: 500
+      }
+    );
+
+    // Finalize PDF
+    doc.end();
+
+  } catch (error) {
+    res.status(500).json({
+      result: false,
+      message: 'Failed to generate receipt PDF',
+      error: error.message
+    });
+  }
+};
+
+const generateShipmentReceiptPDF = async (req, res) => {
+  try {
+    const { 
+      shipmentId, 
+      distributorName, 
+      totalCartons, 
+      shippedAt, 
+      items 
+    } = req.body;
+
+    // ✅ Create PDF document
+    const doc = new PDFDocument({ 
+      size: 'A4',
+      margin: 50 
+    });
+
+    // ✅ Set response headers for PDF download
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="Shipment_${shipmentId}_Receipt.pdf"`);
+
+    // ✅ Pipe PDF to response
+    doc.pipe(res);
+
+    // Header Section
+    doc.fontSize(24)
+       .fillColor('#2563eb')
+       .text('📦 SHIPMENT RECEIPT', 50, 50, { align: 'center' });
+
+    doc.fontSize(12)
+       .fillColor('#666666')
+       .text('Official Shipping Documentation', 50, 80, { align: 'center' });
+
+    // Draw header line
+    doc.strokeColor('#2563eb')
+       .lineWidth(3)
+       .moveTo(50, 100)
+       .lineTo(545, 100)
+       .stroke();
+
+    // Company Info Section
+    doc.fontSize(16)
+       .fillColor('#1f2937')
+       .text('Warehouse Management System', 50, 130);
+
+    doc.fontSize(10)
+       .fillColor('#666666')
+       .text('Address: Main Warehouse Facility', 50, 150)
+       .text('Phone: +91 XXXXX XXXXX', 50, 165)
+       .text('Email: warehouse@company.com', 50, 180);
+
+    // Shipment Details Box
+    doc.rect(50, 220, 245, 140)
+       .fillAndStroke('#f9fafb', '#e5e7eb');
+
+    doc.fontSize(14)
+       .fillColor('#1f2937')
+       .text('📋 Shipment Details', 60, 235);
+
+    doc.fontSize(10)
+       .fillColor('#4b5563')
+       .text(`Shipment ID: ${shipmentId}`, 60, 255)
+       .text(`Date: ${new Date(shippedAt).toLocaleDateString()}`, 60, 270)
+       .text(`Time: ${new Date(shippedAt).toLocaleTimeString()}`, 60, 285)
+       .text(`Status: SHIPPED`, 60, 300)
+       .text(`Total Cartons: ${totalCartons}`, 60, 315)
+       .text(`Shipped By: ${req.user?.name || 'Shipment Manager'}`, 60, 330);
+
+    // Distributor Details Box
+    doc.rect(300, 220, 245, 140)
+       .fillAndStroke('#f9fafb', '#e5e7eb');
+
+    doc.fontSize(14)
+       .fillColor('#1f2937')
+       .text('🏢 Distributor Information', 310, 235);
+
+    doc.fontSize(10)
+       .fillColor('#4b5563')
+       .text(`Company: ${distributorName}`, 310, 255)
+       .text('Contact: +91 XXXXX XXXXX', 310, 270)
+       .text('Email: distributor@email.com', 310, 285)
+       .text('Address: Distributor Address', 310, 300)
+       .text('Transport: Road Transport', 310, 315)
+       .text('City: Mumbai', 310, 330);
+
+    // Items Table Header
+    doc.fontSize(16)
+       .fillColor('#1f2937')
+       .text('📦 Shipped Items', 50, 390);
+
+    // Table Header Background
+    doc.rect(50, 420, 495, 25)
+       .fillAndStroke('#2563eb', '#2563eb');
+
+    doc.fontSize(10)
+       .fillColor('white')
+       .text('#', 60, 430, { width: 30 })
+       .text('Article Name', 100, 430, { width: 140 })
+       .text('Colors', 250, 430, { width: 80 })
+       .text('Sizes', 340, 430, { width: 60 })
+       .text('Carton #', 410, 430, { width: 60 })
+       .text('Status', 480, 430, { width: 65 });
+
+    // Table Rows
+    let yPosition = 450;
+    const maxItemsPerPage = 15;
+    
+    items.slice(0, maxItemsPerPage).forEach((item, index) => {
+      // Alternate row colors
+      if (index % 2 === 0) {
+        doc.rect(50, yPosition - 5, 495, 20)
+           .fillAndStroke('#f9fafb', '#f9fafb');
+      }
+
+      // ✅ Format colors properly
+      const colorsDisplay = Array.isArray(item.colors) ? 
+            item.colors.join(', ') : 
+            (item.colors || 'N/A');
+
+      // ✅ Format sizes using helper function (3X6 format)
+      const sizesDisplay = formatSizeRange(item.sizes);
+
+      doc.fillColor('#1f2937')
+         .text((index + 1).toString(), 60, yPosition, { width: 30 })
+         .text(item.articleName || 'Unknown', 100, yPosition, { width: 140 })
+         .text(colorsDisplay, 250, yPosition, { width: 80 })
+         .text(sizesDisplay, 340, yPosition, { width: 60 }) // ✅ Now shows 3X6 format
+         .text(`#${item.cartonNumber || index + 1}`, 410, yPosition, { width: 60 })
+         .text('SHIPPED', 480, yPosition, { width: 65 });
+
+      yPosition += 20;
+    });
+
+    // Add overflow indicator if there are more items
+    if (items.length > maxItemsPerPage) {
+      doc.fontSize(10)
+         .fillColor('#6b7280')
+         .text(`... and ${items.length - maxItemsPerPage} more items`, 60, yPosition + 10, { style: 'italic' });
+      yPosition += 30;
+    }
+
+    // Summary Section
+    const summaryY = yPosition + 30;
+    doc.rect(50, summaryY, 495, 100)
+       .fillAndStroke('#f0f9ff', '#bae6fd');
+
+    doc.fontSize(14)
+       .fillColor('#1e40af')
+       .text('📊 Shipment Summary', 60, summaryY + 15);
+
+    const uniqueArticles = [...new Set(items.map(item => item.articleName))].filter(Boolean);
+    const estimatedWeight = totalCartons * 2; // 2kg per carton estimate
+
+    doc.fontSize(10)
+       .fillColor('#1e40af')
+       .text(`Total Items Shipped: ${items.length} Items`, 60, summaryY + 35)
+       .text(`Total Cartons: ${totalCartons}`, 60, summaryY + 50)
+       .text(`Unique Articles: ${uniqueArticles.length}`, 60, summaryY + 65)
+       .text(`Estimated Weight: ${estimatedWeight} kg`, 300, summaryY + 35)
+       .text(`Shipment Status: SHIPPED`, 300, summaryY + 50)
+       .text(`Generated: ${new Date().toLocaleDateString()}`, 300, summaryY + 65);
+
+    // Footer
+    const footerY = summaryY + 120;
+    doc.fontSize(10)
+       .fillColor('#6b7280')
+       .text('Contact Information: [warehouse@company.com](mailto:warehouse@company.com) | +91 XXXXX XXXXX', 50, footerY, { align: 'center' })
+       .text('Warehouse Management System', 50, footerY + 15, { align: 'center' })
+       .text(`Receipt generated on ${new Date().toLocaleString()}`, 50, footerY + 35, { align: 'center' })
+       .text('This is a computer-generated document and does not require a signature.', 50, footerY + 50, { align: 'center', style: 'italic' });
+
+    // Add QR tracking info footer
+    doc.fontSize(8)
+       .fillColor('#9ca3af')
+       .text(`Tracking: Use shipment ID ${shipmentId} for status updates`, 50, footerY + 70, { align: 'center' });
+
+    // ✅ Finalize the PDF
+    doc.end();
+
+  } catch (error) {
+    console.error('Error generating PDF receipt:', error);
+    
+    // If response headers haven't been sent yet, send JSON error
+    if (!res.headersSent) {
+      res.status(500).json({
+        result: false,
+        message: 'Failed to generate PDF receipt',
+        error: error.message
+      });
+    } else {
+      // If we're already streaming PDF, we can't send JSON
+      console.error('PDF generation failed mid-stream:', error.message);
+    }
+  }
+};
+
+// ✅ Updated QR label generator with proper size formatting
+
+
+// ✅ Additional helper for warehouse receipt (if you have one)
+const generateWarehouseReceiptPDF = async (req, res) => {
+  try {
+    const { items, warehouseDetails, receivedBy, receivedAt } = req.body;
+
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="Warehouse_Receipt.pdf"');
+
+    doc.pipe(res);
+
+    // Header
+    doc.fontSize(24).text('📦 WAREHOUSE RECEIPT', 50, 50, { align: 'center' });
+    doc.moveDown(2);
+
+    // Warehouse Details
+    doc.fontSize(16).text('Warehouse Information', 50);
+    doc.fontSize(12)
+       .text(`Location: ${warehouseDetails?.location || 'Main Warehouse'}`, 50)
+       .text(`Received By: ${receivedBy?.name || 'Warehouse Inspector'}`, 50)
+       .text(`Date & Time: ${new Date(receivedAt).toLocaleString()}`, 50);
+    
+    doc.moveDown(2);
+
+    // Items Table
+    doc.fontSize(16).text('Received Items', 50);
+    doc.moveDown(1);
+
+    // Table Header
+    doc.rect(50, doc.y, 495, 25).fillAndStroke('#2563eb', '#2563eb');
+    doc.fillColor('white').fontSize(10);
+    
+    let yPos = doc.y + 8;
+    doc.text('#', 60, yPos, { width: 30 })
+       .text('Article Name', 100, yPos, { width: 120 })
+       .text('Colors', 230, yPos, { width: 80 })
+       .text('Sizes', 320, yPos, { width: 60 })
+       .text('Carton #', 390, yPos, { width: 50 })
+       .text('Quality', 450, yPos, { width: 80 });
+
+    doc.y += 35;
+    doc.fillColor('#000000');
+
+    // Table Rows
+    items.forEach((item, index) => {
+      if (index % 2 === 0) {
+        doc.rect(50, doc.y - 5, 495, 20).fillAndStroke('#f9fafb', '#f9fafb');
+      }
+
+      // ✅ Format sizes using helper function
+      const sizesDisplay = formatSizeRange(item.sizes);
+      const colorsDisplay = Array.isArray(item.colors) ? item.colors.join(', ') : (item.colors || 'N/A');
+
+      yPos = doc.y;
+      doc.text((index + 1).toString(), 60, yPos, { width: 30 })
+         .text(item.articleName || 'Unknown', 100, yPos, { width: 120 })
+         .text(colorsDisplay, 230, yPos, { width: 80 })
+         .text(sizesDisplay, 320, yPos, { width: 60 }) // ✅ Shows 3X6 format
+         .text(`#${item.cartonNumber || index + 1}`, 390, yPos, { width: 50 })
+         .text(item.quality || 'Good', 450, yPos, { width: 80 });
+
+      doc.y += 20;
+    });
+
+    // Footer
+    doc.moveDown(2);
+    doc.fontSize(10)
+       .text('This receipt confirms the successful warehouse receipt of the above items.', 50, { align: 'center' });
+
+    doc.end();
+
+  } catch (error) {
+    res.status(500).json({
+      result: false,
+      message: 'Failed to generate warehouse receipt',
+      error: error.message
+    });
+  }
+};
+
+
+
+
 
 export {register, login, getAdmin, addDistributor, deleteDistributor, getDistributors, updateDistributor, generateOrderPerforma, addFestivleImage, getFestivleImages, generateQRCodes, downloadQRCodes, scanQRCode, getQRStatistics, getInventoryData, getSingleProductInventory, getAllInventory, addContractor, addWarehouseManager, addShipmentManager,
 getContractors,
@@ -2976,4 +2944,6 @@ getContractors,
   getShipmentDetails,
   getAllShipments,
   generateShipmentReceipt,
-  getInventoryByArticleId}
+  getInventoryByArticleId,
+  generateQRWithLabel,
+  generateWarehouseReceiptPDF}

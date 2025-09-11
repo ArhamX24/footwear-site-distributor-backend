@@ -1,7 +1,7 @@
 
 import express from "express";
 import { contractorOnly } from "../MIddlewares/roleauth.middleware.js";
-import { generateQRCodes, downloadQRCodes, generateReceiptPdf } from "../Controllers/Admin/admin.controllers.js";
+import { generateQRCodes, downloadQRCodes, generateReceiptPdf} from "../Controllers/Admin/admin.controllers.js";
 
 const contractorRouter = express.Router();
 

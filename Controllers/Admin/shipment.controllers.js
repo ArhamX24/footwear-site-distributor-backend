@@ -14,6 +14,13 @@ const autoDeleteSettingSchema = new Schema({
 
 const AutoDeleteSetting = model('AutoDeleteSetting', autoDeleteSettingSchema);
 
+const formatSizeRange = (sizes) => {
+  if (!sizes || sizes.length === 0) return 'N/A';
+  if (sizes.length === 1) return sizes[0].toString();
+  const sortedSizes = [...sizes].sort((a, b) => a - b);
+  return `${sortedSizes[0]}X${sortedSizes[sortedSizes.length - 1]}`;
+};
+
 // Get all shipments with enhanced filtering
 const getAllShipments = async (req, res) => {
   try {
@@ -39,9 +46,21 @@ const getAllShipments = async (req, res) => {
       })
       .sort({ shippedAt: -1 });
 
-    // Enhance shipments with article images
+    // ✅ Enhanced shipments with proper size formatting
     const enhancedShipments = await Promise.all(shipments.map(async (shipment) => {
       const shipmentObj = shipment.toObject();
+      
+      // ✅ Format sizes in each item
+      shipmentObj.items = shipmentObj.items.map(item => ({
+        ...item,
+        articleDetails: {
+          ...item.articleDetails,
+          sizesFormatted: formatSizeRange(item.articleDetails?.sizes), // ✅ Add formatted sizes
+          colorsFormatted: Array.isArray(item.articleDetails?.colors) 
+            ? item.articleDetails.colors.join(', ') 
+            : item.articleDetails?.colors || 'N/A'
+        }
+      }));
       
       // Get article images for each item
       for (let item of shipmentObj.items) {
@@ -86,6 +105,56 @@ const getAllShipments = async (req, res) => {
     res.status(500).json({
       result: false,
       message: 'Failed to fetch shipments',
+      error: error.message
+    });
+  }
+};
+
+// Generate shipment details PDF/view with proper formatting
+const viewShipmentDetails = async (req, res) => {
+  try {
+    const { shipmentId } = req.params;
+    
+    const shipment = await Shipment.findById(shipmentId)
+      .populate('distributorId', 'name phoneNo email distributorDetails')
+      .populate('shippedBy', 'name phoneNo')
+      .populate({
+        path: 'items.qrCodeId',
+        select: 'articleName articleDetails'
+      });
+
+    if (!shipment) {
+      return res.status(404).json({
+        result: false,
+        message: 'Shipment not found'
+      });
+    }
+
+    // ✅ Format the shipment data for display
+    const formattedShipment = {
+      ...shipment.toObject(),
+      items: shipment.items.map(item => ({
+        ...item,
+        articleDetails: {
+          ...item.articleDetails,
+          sizesFormatted: formatSizeRange(item.articleDetails?.sizes), // ✅ Range format
+          colorsFormatted: Array.isArray(item.articleDetails?.colors) 
+            ? item.articleDetails.colors.join(', ') 
+            : item.articleDetails?.colors || 'N/A'
+        }
+      }))
+    };
+    
+    res.status(200).json({
+      result: true,
+      message: 'Shipment details retrieved successfully',
+      data: formattedShipment
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      result: false,
+      message: 'Failed to view shipment details',
       error: error.message
     });
   }
@@ -179,42 +248,6 @@ const cleanupOldShipments = async (req, res) => {
 };
 
 // Generate shipment details PDF/view
-const viewShipmentDetails = async (req, res) => {
-  try {
-    const { shipmentId } = req.params;
-    
-    const shipment = await Shipment.findById(shipmentId)
-      .populate('distributorId', 'name phoneNo email distributorDetails')
-      .populate('shippedBy', 'name phoneNo')
-      .populate({
-        path: 'items.qrCodeId',
-        select: 'articleName articleDetails'
-      });
-
-    if (!shipment) {
-      return res.status(404).json({
-        result: false,
-        message: 'Shipment not found'
-      });
-    }
-
-    // Generate and return PDF or redirect to a details view
-    // Implementation depends on your PDF generation setup
-    
-    res.status(200).json({
-      result: true,
-      message: 'Shipment details retrieved successfully',
-      data: shipment
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      result: false,
-      message: 'Failed to view shipment details',
-      error: error.message
-    });
-  }
-};
 
 // Auto-cleanup cron job (run daily at midnight)
 const setupAutoCleanup = () => {

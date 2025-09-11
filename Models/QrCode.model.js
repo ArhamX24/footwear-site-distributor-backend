@@ -11,16 +11,20 @@ const qrCodeSchema = new Schema({
 
   contractorInput: {
     articleName: { type: String, required: true },
-    color: { type: String, required: true },
-    size: { type: String, required: true },
+    articleId: { type: String }, // ✅ Added articleId
+    colors: [String], // ✅ Changed to array
+    sizes: [Number], // ✅ Changed to array of numbers
     cartonNumber: { type: Number, required: true },
     totalCartons: { type: Number, required: true }
   },
 
   productReference: {
     productId: { type: Schema.Types.ObjectId, ref: 'Product' },
+    variantId: Schema.Types.ObjectId,
+    articleId: Schema.Types.ObjectId,
     variantName: String,
     articleName: String,
+    segment: String,
     isMatched: { type: Boolean, default: false },
     matchedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     matchedAt: Date
@@ -94,7 +98,6 @@ const qrCodeSchema = new Schema({
   isActive: { type: Boolean, default: true }
 }, { timestamps: true });
 
-
 const QRCode = model('QRCode', qrCodeSchema);
 
-export default QRCode
+export default QRCode;

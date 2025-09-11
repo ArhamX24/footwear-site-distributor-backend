@@ -8,10 +8,10 @@ const inventoryItemSchema = new Schema({
   uniqueId: { type: String, required: true, unique: true },
   articleName: { type: String, required: true },
   articleDetails: {
-    color: { type: String, required: true },
-    size: { type: String, required: true },
+    colors: [String], // ✅ Changed to array
+    sizes: [Number], // ✅ Changed to array of numbers
     numberOfCartons: { type: Number, required: true },
-    articleId: {type: Schema.Types.ObjectId}
+    articleId: { type: Schema.Types.ObjectId }
   },
   status: {
     type: String,
@@ -29,47 +29,49 @@ const inventoryItemSchema = new Schema({
 const inventorySchema = new Schema({
   productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true, unique: true },
   
-  // ✅ ONLY track received and shipped quantities
   quantityByStage: {
     received: { type: Number, default: 0 },
     shipped: { type: Number, default: 0 }
   },
   
-  availableQuantity: { type: Number, default: 0, min: 0 }, // Items available to ship
+  availableQuantity: { type: Number, default: 0, min: 0 },
   items: [inventoryItemSchema],
   lastUpdated: { type: Date, default: Date.now }
 }, { timestamps: true });
 
-// ✅ Updated pre-save hook to only calculate received and shipped
+// ✅ Helper function to format sizes as range
+const formatSizeRange = (sizes) => {
+  if (!sizes || sizes.length === 0) return 'N/A';
+  if (sizes.length === 1) return sizes[0].toString();
+  
+  const sortedSizes = [...sizes].sort((a, b) => a - b);
+  return `${sortedSizes[0]}X${sortedSizes[sortedSizes.length - 1]}`;
+};
+
 inventorySchema.pre('save', function(next) {
   this.quantityByStage.received = this.items.filter(i => i.status === 'received').length;
   this.quantityByStage.shipped = this.items.filter(i => i.status === 'shipped').length;
-  this.availableQuantity = this.quantityByStage.received; // Only received items are available
+  this.availableQuantity = this.quantityByStage.received;
   this.lastUpdated = new Date();
   next();
 });
 
 // ✅ Updated syncWithQRCode method
-// ✅ Enhanced syncWithQRCode method in Inventory schema
-// Enhanced syncWithQRCode method in Inventory schema
 inventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
   const QRCode = mongoose.model('QRCode');
   const qrCode = await QRCode.findById(qrCodeId);
   if (!qrCode) throw new Error('QRCode not found');
 
-  // Only map to 'received' or 'shipped'
   let status = 'received';
   if (qrCode.status === 'shipped') {
     status = 'shipped';
   }
 
-  // Resolve articleName and articleId
   let articleName = qrCode.articleName
     || qrCode.contractorInput?.articleName
     || qrCode.productReference?.articleName
     || 'Unknown Article';
 
-  // ✅ Extract articleId from QR code
   let articleId = qrCode.contractorInput?.articleId 
     || qrCode.productReference?.articleId;
 
@@ -80,10 +82,10 @@ inventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
     uniqueId: qrCode.uniqueId,
     articleName,
     articleDetails: {
-      color: qrCode.contractorInput?.color || 'Unknown',
-      size: qrCode.contractorInput?.size || 'Unknown',
+      colors: qrCode.contractorInput?.colors || ['Unknown'], // ✅ Array
+      sizes: qrCode.contractorInput?.sizes || [0], // ✅ Array of numbers
       numberOfCartons: qrCode.contractorInput?.totalCartons || 1,
-      articleId: articleId // ✅ Store article ID in inventory
+      articleId: articleId
     },
     status,
     receivedAt: qrCode.warehouseDetails?.receivedAt,
@@ -100,7 +102,6 @@ inventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
     Object.assign(this.items[idx], baseItem);
   }
 
-  // Recalculate counts after sync
   this.quantityByStage.received = this.items.filter(i => i.status === 'received').length;
   this.quantityByStage.shipped = this.items.filter(i => i.status === 'shipped').length;
   this.availableQuantity = this.quantityByStage.received;
@@ -108,8 +109,6 @@ inventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
 
   return this.save();
 };
-
-
 
 inventorySchema.index({ productId: 1 });
 inventorySchema.index({ 'items.qrCodeId': 1 });

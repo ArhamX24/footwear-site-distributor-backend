@@ -1,4 +1,4 @@
-// models/Shipment.js (no lifecycle changes needed)
+// models/Shipment.js
 import mongoose from 'mongoose';
 const { Schema, model } = mongoose;
 
@@ -12,7 +12,11 @@ const shipmentSchema = new Schema({
     qrCodeId: { type: Schema.Types.ObjectId, ref: 'QRCode' },
     uniqueId: String,
     articleName: String,
-    articleDetails: { color: String, size: String, numberOfCartons: Number },
+    articleDetails: { 
+      colors: [String], // ✅ Array
+      sizes: [Number], // ✅ Array of numbers
+      numberOfCartons: Number 
+    },
     manufacturedAt: Date,
     receivedAt: Date,
     shippedAt: Date,
@@ -21,7 +25,6 @@ const shipmentSchema = new Schema({
   totalCartons: { type: Number, default: 0 },
   status: { type: String, enum: ['active', 'completed', 'cancelled', 'shipped'], default: 'active' }
 }, { timestamps: true });
-
 
 const Shipment = model('Shipment', shipmentSchema);
 
