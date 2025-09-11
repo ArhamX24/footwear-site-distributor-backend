@@ -14,7 +14,6 @@ let cookieOption = {
     httpOnly: true,
     secure: true,
     sameSite: 'none'
-    // sameSite: 'Lax'
 }
 
 let statusCodes = {

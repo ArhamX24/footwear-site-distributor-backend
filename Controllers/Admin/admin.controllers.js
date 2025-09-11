@@ -77,7 +77,6 @@ let cookieOption = {
     path: "/",
     httpOnly: true,
     secure: true,
-    // sameSite: 'Lax'
     sameSite: 'none'
 }
 
