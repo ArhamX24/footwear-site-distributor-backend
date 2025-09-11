@@ -6,7 +6,8 @@ let cookieOption = {
     path: "/",
     httpOnly: true,
     secure: true,
-    sameSite: 'lax'
+    sameSite: 'none',
+    // sameSite: 'lax',
 };
 
 let statusCodes = {
