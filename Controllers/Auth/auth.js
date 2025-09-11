@@ -92,14 +92,6 @@ const login = async (req, res) => {
             }
         );
 
-        // Set cookies
-        const cookieOption = {
-            path: "/",
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
-        };
-
         res.cookie("accessToken", accessToken, cookieOption);
         res.cookie("refreshToken", refreshToken, cookieOption);
 
