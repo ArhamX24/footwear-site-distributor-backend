@@ -2772,7 +2772,6 @@ const generateShipmentReceiptPDF = async (req, res) => {
        .fillColor('#4b5563')
        .text(`Company: ${distributorName}`, 310, 255)
        .text(`Contact: ${distributorPhoneNo}`, 310, 270)
-       .text(`Transport: ${distributorTransport}`, 310, 315)
 
     // Items Table Header
     doc.fontSize(16)
