@@ -1193,7 +1193,7 @@ const generateShipmentReceipt = async (req, res) => {
     // Header Section
     doc.fontSize(24)
        .fillColor('#2563eb')
-       .text('📦 SHIPMENT RECEIPT', 50, 50, { align: 'center' });
+       .text('SHIPMENT RECEIPT', 50, 50, { align: 'center' });
 
     doc.fontSize(12)
        .fillColor('#666666')
@@ -1209,13 +1209,12 @@ const generateShipmentReceipt = async (req, res) => {
     // Company Info Section
     doc.fontSize(16)
        .fillColor('#1f2937')
-       .text('Warehouse Management System', 50, 130);
+       .text('Pinkey Footwear', 50, 130);
 
     doc.fontSize(10)
        .fillColor('#666666')
        .text('Address: Main Warehouse Facility', 50, 150)
        .text('Phone: +91 XXXXX XXXXX', 50, 165)
-       .text('Email: warehouse@company.com', 50, 180);
 
     // Shipment Details Box
     doc.rect(50, 220, 245, 120)
@@ -1223,7 +1222,7 @@ const generateShipmentReceipt = async (req, res) => {
 
     doc.fontSize(14)
        .fillColor('#1f2937')
-       .text('📋 Shipment Details', 60, 235);
+       .text('Shipment Details', 60, 235);
 
     doc.fontSize(10)
        .fillColor('#4b5563')
@@ -1239,7 +1238,7 @@ const generateShipmentReceipt = async (req, res) => {
 
     doc.fontSize(14)
        .fillColor('#1f2937')
-       .text('🏢 Distributor Information', 310, 235);
+       .text('Distributor Information', 310, 235);
 
     const distributor = shipment.distributorId;
     doc.fontSize(10)
@@ -1252,7 +1251,7 @@ const generateShipmentReceipt = async (req, res) => {
     // Items Table Header
     doc.fontSize(16)
        .fillColor('#1f2937')
-       .text('📦 Shipped Items', 50, 370);
+       .text('Shipped Items', 50, 370);
 
     // Table Header Background
     doc.rect(50, 400, 495, 25)
@@ -1291,28 +1290,10 @@ const generateShipmentReceipt = async (req, res) => {
       yPosition += 20;
     });
 
-    // Summary Section
-    const summaryY = yPosition + 30;
-    doc.rect(50, summaryY, 495, 80)
-       .fillAndStroke('#f0f9ff', '#bae6fd');
-
-    doc.fontSize(14)
-       .fillColor('#1e40af')
-       .text('📊 Shipment Summary', 60, summaryY + 15);
-
-    doc.fontSize(10)
-       .fillColor('#1e40af')
-       .text(`Total Items: ${shipment.items.length}`, 60, summaryY + 35)
-       .text(`Total Cartons: ${shipment.totalCartons}`, 60, summaryY + 50)
-       .text(`Shipment Status: ${shipment.status.toUpperCase()}`, 300, summaryY + 35)
-       .text(`Generated: ${new Date().toLocaleDateString()}`, 300, summaryY + 50);
-
     // Footer
     const footerY = summaryY + 100;
     doc.fontSize(10)
        .fillColor('#6b7280')
-       .text('Contact: warehouse@company.com | +91 XXXXX XXXXX', 50, footerY, { align: 'center' })
-       .text('Warehouse Management System', 50, footerY + 15, { align: 'center' })
        .text(`Receipt generated on ${new Date().toLocaleString()}`, 50, footerY + 35, { align: 'center' })
        .text('This is a computer-generated document.', 50, footerY + 50, { align: 'center', style: 'italic' });
 
@@ -2087,7 +2068,6 @@ const createOrUpdateShipment = async (qrCode, user, distributorDetails) => {
   try {
     const shipmentId = `SHIP_${Date.now()}_${distributorDetails.distributorId.slice(-6)}`;
 
-    // ✅ Helper function to format sizes as range
     const formatSizeRange = (sizes) => {
       if (!sizes || sizes.length === 0) return 'N/A';
       if (sizes.length === 1) return sizes[0].toString();
@@ -2095,31 +2075,21 @@ const createOrUpdateShipment = async (qrCode, user, distributorDetails) => {
       return `${sortedSizes[0]}X${sortedSizes[sortedSizes.length - 1]}`;
     };
 
-    // ✅ Create new item for shipment with proper data structure
+    // ✅ FIXED: Create item with shipped status
     const newItem = {
       qrCodeId: qrCode._id,
       uniqueId: qrCode.uniqueId,
       articleName: qrCode.articleName || qrCode.contractorInput?.articleName,
       articleDetails: {
-        colors: qrCode.contractorInput?.colors || ['Unknown'], // ✅ Array
-        sizes: qrCode.contractorInput?.sizes || [0], // ✅ Array of numbers
+        colors: qrCode.contractorInput?.colors || ['Unknown'],
+        sizes: qrCode.contractorInput?.sizes || [0],
         numberOfCartons: qrCode.contractorInput?.totalCartons || 1
       },
       manufacturedAt: qrCode.manufacturingDetails?.manufacturedAt || null,
       receivedAt: qrCode.warehouseDetails?.receivedAt || new Date(),
       shippedAt: new Date(),
-      trackingNumber: `TRACK_${Date.now()}`
-    };
-
-    const shipmentData = {
-      shipmentId,
-      distributorId: distributorDetails.distributorId,
-      distributorName: distributorDetails.distributorName,
-      shippedBy: user._id,
-      shippedAt: new Date(),
-      status: 'active',
-      items: [newItem],
-      totalCartons: 1
+      trackingNumber: `TRACK_${Date.now()}`,
+      status: 'shipped' // ✅ CRITICAL: Set item status as shipped
     };
 
     // Check if shipment already exists for this distributor today
@@ -2131,21 +2101,40 @@ const createOrUpdateShipment = async (qrCode, user, distributorDetails) => {
     let existingShipment = await Shipment.findOne({
       distributorId: distributorDetails.distributorId,
       shippedAt: { $gte: today, $lt: tomorrow },
-      status: 'active'
+      status: 'active' // Only find active shipments
     });
 
     let shipment;
     if (existingShipment) {
+      // Add item to existing shipment
       existingShipment.items.push(newItem);
       existingShipment.totalCartons = existingShipment.items.length;
+      
+      // ✅ CRITICAL FIX: Check if all items are shipped and update status
+      const allItemsShipped = existingShipment.items.every(item => item.status === 'shipped');
+      if (allItemsShipped) {
+        existingShipment.status = 'completed';
+      }
+      
       shipment = await existingShipment.save();
     } else {
+      // Create new shipment
+      const shipmentData = {
+        shipmentId,
+        distributorId: distributorDetails.distributorId,
+        distributorName: distributorDetails.distributorName,
+        shippedBy: user._id,
+        shippedAt: new Date(),
+        status: 'completed', // ✅ FIXED: Set as completed since we're shipping items
+        items: [newItem],
+        totalCartons: 1
+      };
+      
       const newShipment = new Shipment(shipmentData);
       shipment = await newShipment.save();
     }
 
     await updateInventoryAfterShipment(qrCode);
-
     return shipment;
 
   } catch (error) {
@@ -2153,6 +2142,7 @@ const createOrUpdateShipment = async (qrCode, user, distributorDetails) => {
     throw error;
   }
 };
+
 
 // ✅ NEW: Function to manually update inventory after shipment
 const updateInventoryAfterShipment = async (qrCode) => {
@@ -2211,6 +2201,45 @@ const updateInventoryAfterShipment = async (qrCode) => {
   } catch (error) {
     console.error('Error updating inventory after shipment:', error);
     throw error;
+  }
+};
+
+// ✅ NEW: Function to manually complete shipment
+const completeShipment = async (req, res) => {
+  try {
+    const { shipmentId } = req.params;
+    
+    const shipment = await Shipment.findById(shipmentId);
+    if (!shipment) {
+      return res.status(404).json({
+        result: false,
+        message: 'Shipment not found'
+      });
+    }
+    
+    // Update all items to shipped and shipment to completed
+    shipment.items.forEach(item => {
+      if (item.status !== 'shipped') {
+        item.status = 'shipped';
+        item.shippedAt = new Date();
+      }
+    });
+    
+    shipment.status = 'completed';
+    await shipment.save();
+    
+    res.status(200).json({
+      result: true,
+      message: 'Shipment completed successfully',
+      data: shipment
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      result: false,
+      message: 'Failed to complete shipment',
+      error: error.message
+    });
   }
 };
 
@@ -2288,7 +2317,16 @@ const getAllShipments = async (req, res) => {
     const { status, distributorId } = req.query;
     
     let query = {};
-    if (status) query.status = status;
+    if (status) {
+      // ✅ FIXED: Handle status filtering correctly
+      if (status === 'pending') {
+        query.status = 'active';
+      } else if (status === 'shipped') {
+        query.status = 'completed';
+      } else {
+        query.status = status; // 'active' or 'completed'
+      }
+    }
     if (distributorId) query.distributorId = distributorId;
 
     const shipments = await Shipment.find(query)
@@ -2296,12 +2334,19 @@ const getAllShipments = async (req, res) => {
       .populate('shippedBy', 'name phoneNo')
       .sort({ shippedAt: -1 });
 
+    // ✅ FIXED: Add status summary for frontend
+    const statusSummary = {
+      active: await Shipment.countDocuments({ status: 'active' }),
+      completed: await Shipment.countDocuments({ status: 'completed' })
+    };
+
     res.status(200).json({
       result: true,
       message: 'Shipments retrieved successfully',
       data: {
         shipments,
-        totalCount: shipments.length
+        totalCount: shipments.length,
+        statusSummary
       }
     });
 
@@ -2314,6 +2359,7 @@ const getAllShipments = async (req, res) => {
     });
   }
 };
+
 
 
 // Get All Users by Role
@@ -2651,7 +2697,9 @@ const generateShipmentReceiptPDF = async (req, res) => {
   try {
     const { 
       shipmentId, 
-      distributorName, 
+      distributorName,
+      distributorPhoneNo,
+      distributorTransport, 
       totalCartons, 
       shippedAt, 
       items 
@@ -2673,7 +2721,7 @@ const generateShipmentReceiptPDF = async (req, res) => {
     // Header Section
     doc.fontSize(24)
        .fillColor('#2563eb')
-       .text('📦 SHIPMENT RECEIPT', 50, 50, { align: 'center' });
+       .text('SHIPMENT RECEIPT', 50, 50, { align: 'center' });
 
     doc.fontSize(12)
        .fillColor('#666666')
@@ -2689,13 +2737,12 @@ const generateShipmentReceiptPDF = async (req, res) => {
     // Company Info Section
     doc.fontSize(16)
        .fillColor('#1f2937')
-       .text('Warehouse Management System', 50, 130);
+       .text('Pinkey Footwear', 50, 130);
 
     doc.fontSize(10)
        .fillColor('#666666')
        .text('Address: Main Warehouse Facility', 50, 150)
        .text('Phone: +91 XXXXX XXXXX', 50, 165)
-       .text('Email: warehouse@company.com', 50, 180);
 
     // Shipment Details Box
     doc.rect(50, 220, 245, 140)
@@ -2703,7 +2750,7 @@ const generateShipmentReceiptPDF = async (req, res) => {
 
     doc.fontSize(14)
        .fillColor('#1f2937')
-       .text('📋 Shipment Details', 60, 235);
+       .text('Shipment Details', 60, 235);
 
     doc.fontSize(10)
        .fillColor('#4b5563')
@@ -2712,7 +2759,6 @@ const generateShipmentReceiptPDF = async (req, res) => {
        .text(`Time: ${new Date(shippedAt).toLocaleTimeString()}`, 60, 285)
        .text(`Status: SHIPPED`, 60, 300)
        .text(`Total Cartons: ${totalCartons}`, 60, 315)
-       .text(`Shipped By: ${req.user?.name || 'Shipment Manager'}`, 60, 330);
 
     // Distributor Details Box
     doc.rect(300, 220, 245, 140)
@@ -2720,21 +2766,18 @@ const generateShipmentReceiptPDF = async (req, res) => {
 
     doc.fontSize(14)
        .fillColor('#1f2937')
-       .text('🏢 Distributor Information', 310, 235);
+       .text('Distributor Information', 310, 235);
 
     doc.fontSize(10)
        .fillColor('#4b5563')
        .text(`Company: ${distributorName}`, 310, 255)
-       .text('Contact: +91 XXXXX XXXXX', 310, 270)
-       .text('Email: distributor@email.com', 310, 285)
-       .text('Address: Distributor Address', 310, 300)
-       .text('Transport: Road Transport', 310, 315)
-       .text('City: Mumbai', 310, 330);
+       .text(`Contact: ${distributorPhoneNo}`, 310, 270)
+       .text(`Transport: ${distributorTransport}`, 310, 315)
 
     // Items Table Header
     doc.fontSize(16)
        .fillColor('#1f2937')
-       .text('📦 Shipped Items', 50, 390);
+       .text('Shipped Items', 50, 390);
 
     // Table Header Background
     doc.rect(50, 420, 495, 25)
@@ -2794,26 +2837,12 @@ const generateShipmentReceiptPDF = async (req, res) => {
 
     doc.fontSize(14)
        .fillColor('#1e40af')
-       .text('📊 Shipment Summary', 60, summaryY + 15);
-
-    const uniqueArticles = [...new Set(items.map(item => item.articleName))].filter(Boolean);
-    const estimatedWeight = totalCartons * 2; // 2kg per carton estimate
-
-    doc.fontSize(10)
-       .fillColor('#1e40af')
-       .text(`Total Items Shipped: ${items.length} Items`, 60, summaryY + 35)
-       .text(`Total Cartons: ${totalCartons}`, 60, summaryY + 50)
-       .text(`Unique Articles: ${uniqueArticles.length}`, 60, summaryY + 65)
-       .text(`Estimated Weight: ${estimatedWeight} kg`, 300, summaryY + 35)
-       .text(`Shipment Status: SHIPPED`, 300, summaryY + 50)
-       .text(`Generated: ${new Date().toLocaleDateString()}`, 300, summaryY + 65);
+       .text('Shipment Summary', 60, summaryY + 15);
 
     // Footer
     const footerY = summaryY + 120;
     doc.fontSize(10)
        .fillColor('#6b7280')
-       .text('Contact Information: [warehouse@company.com](mailto:warehouse@company.com) | +91 XXXXX XXXXX', 50, footerY, { align: 'center' })
-       .text('Warehouse Management System', 50, footerY + 15, { align: 'center' })
        .text(`Receipt generated on ${new Date().toLocaleString()}`, 50, footerY + 35, { align: 'center' })
        .text('This is a computer-generated document and does not require a signature.', 50, footerY + 50, { align: 'center', style: 'italic' });
 

@@ -20,10 +20,21 @@ const shipmentSchema = new Schema({
     manufacturedAt: Date,
     receivedAt: Date,
     shippedAt: Date,
-    trackingNumber: String
+    trackingNumber: String,
+    // ✅ ADD: Individual item status
+    status: { 
+      type: String, 
+      enum: ['pending', 'shipped'], 
+      default: 'pending' 
+    }
   }],
   totalCartons: { type: Number, default: 0 },
-  status: { type: String, enum: ['active', 'completed', 'cancelled', 'shipped'], default: 'active' }
+  // ✅ FIXED: Only two status types as requested
+  status: { 
+    type: String, 
+    enum: ['active', 'completed'], // active = pending, completed = shipped
+    default: 'active' 
+  }
 }, { timestamps: true });
 
 const Shipment = model('Shipment', shipmentSchema);
