@@ -1,0 +1,146 @@
+
+
+const scanQRCode = async (req, res) => {
+  try {
+    const { uniqueId } = req.params;
+    const { event, location, notes, qualityCheck, distributorDetails, trackingNumber } = req.body;
+
+    if (!req.user?._id) {
+      return res.status(401).json({
+        result: false,
+        message: "User authentication required for scanning"
+      });
+    }
+
+    const qrCode = await QRCode.findOne({ uniqueId });
+
+    if (!qrCode) {
+      return res.status(404).json({
+        result: false,
+        message: `QR code with uniqueId '${uniqueId}' not found in database.`
+      });
+    }
+
+    // --- Business Logic Validation ---
+    const allowedEvents = new Set(['received', 'shipped']);
+    if (!allowedEvents.has(event)) {
+      return res.status(400).json({
+        result: false,
+        message: "Invalid event. Only 'received' and 'shipped' are allowed."
+      });
+    }
+
+    // Prevent re-receiving an already received/shipped item
+    if (event === 'received' && qrCode.status !== 'manufactured') {
+      return res.status(400).json({
+        result: false,
+        message: "This carton cannot be received. It has already been processed or was not marked as manufactured."
+      });
+    }
+
+    // Prevent shipping an item that isn't in the warehouse
+    if (event === 'shipped' && qrCode.status !== 'received') {
+      return res.status(400).json({
+        result: false,
+        message: "Cannot ship a carton that hasn't been received at the warehouse yet."
+      });
+    }
+
+    // --- Update QR Code Document ---
+    const scanRecord = {
+      scannedAt: new Date(),
+      scannedBy: req.user._id,
+      event,
+      notes: notes || '',
+      location: location || 'Main Warehouse',
+      qualityCheck: qualityCheck || { passed: true, notes: '' }
+    };
+    qrCode.scans.push(scanRecord);
+    qrCode.totalScans = (qrCode.totalScans || 0) + 1;
+    qrCode.lastScannedAt = new Date();
+    if (!qrCode.firstScannedAt) {
+      qrCode.firstScannedAt = new Date();
+    }
+    
+    let responseMessage = "";
+    let responseData = {};
+
+    // --- Process Event ---
+    if (event === 'received') {
+      qrCode.status = 'received';
+      qrCode.warehouseDetails = {
+        receivedAt: new Date(),
+        receivedBy: {
+          userId: req.user._id,
+          userType: req.user.role || 'warehouse_inspector',
+          name: req.user.name || 'Warehouse Inspector'
+        },
+        conditionOnReceipt: qualityCheck?.passed ? 'good' : 'damaged',
+        location: location || 'Main Warehouse',
+        notes: notes || ''
+      };
+
+      // ✅ Update inventory only on receipt scan
+      await updateInventoryFromQRScan(qrCode);
+      
+      responseMessage = "Warehouse receipt scan completed successfully. Inventory updated.";
+      responseData = {
+        currentStage: 'in_warehouse',
+        nextStage: 'shipment'
+      };
+
+    } else if (event === 'shipped') {
+      qrCode.status = 'shipped';
+      qrCode.shipmentDetails = {
+        shippedAt: new Date(),
+        shippedBy: {
+          userId: req.user._id,
+          userType: req.user.role || 'shipment_manager',
+          name: req.user.name || 'Shipment Manager'
+        },
+        distributorId: distributorDetails?.distributorId,
+        distributorName: distributorDetails?.distributorName,
+        trackingNumber,
+        notes: notes || ''
+      };
+
+      // ✅ Update inventory to mark the item as shipped
+      await updateInventoryFromQRScan(qrCode);
+      
+      responseMessage = "Shipment scan completed successfully. Inventory updated.";
+      responseData = {
+        currentStage: 'shipped',
+        nextStage: 'delivered',
+        shipmentDetails: {
+          distributorName: qrCode.shipmentDetails.distributorName,
+          trackingNumber,
+          shippedAt: qrCode.shipmentDetails.shippedAt
+        }
+      };
+    }
+
+    await qrCode.save();
+
+    return res.status(200).json({
+      result: true,
+      message: responseMessage,
+      data: {
+        qrCode: {
+          uniqueId: qrCode.uniqueId,
+          articleName: qrCode.articleName,
+          status: qrCode.status,
+          ...responseData
+        },
+        scanDetails: scanRecord
+      }
+    });
+
+  } catch (error) {
+    console.error('Error processing QR code scan:', error);
+    res.status(500).json({
+      result: false,
+      message: "Failed to process QR code scan",
+      error: error.message
+    });
+  }
+};
