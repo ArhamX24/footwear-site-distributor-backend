@@ -24,9 +24,13 @@ import { addToInventory, removeFromInventoryAndCreateShipment } from "../../Util
 import { createCanvas, loadImage } from 'canvas';
 import PDFDocument from 'pdfkit';
 import mongoose from "mongoose";
+import stream from "stream"
+import { promisify } from "util";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+const pipeline = promisify(stream.pipeline);
 
 const validationSchema = zod.object({
     phoneNo: zod
@@ -880,80 +884,70 @@ const scanQRCode = async (req, res) => {
 };
 
 const downloadQRCodes = async (req, res) => {
-  try {
-    const { qrCodes, batchId, articleInfo } = req.body;
+    try {
+        const { batchId, articleInfo } = req.query; // Get metadata from query params
 
-    if (!qrCodes || !Array.isArray(qrCodes) || qrCodes.length === 0) {
-      return res.status(400).json({
-        result: false,
-        message: "QR codes data is required"
-      });
-    }
+        // Set response headers for streaming a zip file
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader(
+            'Content-Disposition',
+            `attachment; filename="QR_Codes_${batchId || 'Batch'}_${Date.now()}.zip"`
+        );
 
-    const tempDir = path.join(process.cwd(), 'temp', 'qr-codes');
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
-    }
+        const archive = archiver('zip', { zlib: { level: 9 } });
 
-    const zipFileName = `QR_Codes_${batchId || 'Batch'}_${Date.now()}.zip`;
-    const zipFilePath = path.join(tempDir, zipFileName);
+        // Handle potential errors during archiving
+        archive.on('error', (err) => {
+            console.error('Archive error:', err);
+            res.status(500).send({ error: 'Failed to create zip archive' });
+        });
 
-    const output = fs.createWriteStream(zipFilePath);
-    const archive = archiver('zip', { zlib: { level: 9 } });
+        // Pipe the archive stream directly to the response
+        archive.pipe(res);
 
-    output.on('close', () => {
-      console.log(`Archive created: ${archive.pointer()} total bytes`);
+        // Process the incoming stream of QR code data
+        let qrCounter = 0;
+        const qrStream = new stream.Transform({
+            transform(chunk, encoding, callback) {
+                try {
+                    // Assuming each chunk is a JSON string of a QR code object
+                    const qrData = JSON.parse(chunk.toString());
+                    
+                    if (qrData.qrCodeImage) {
+                        const base64Data = qrData.qrCodeImage.replace(/^data:image\/png;base64,/, '');
+                        const buffer = Buffer.from(base64Data, 'base64');
+                        
+                        const cartonNum = qrData.cartonNumber || qrCounter++;
+                        const uniqueId = qrData.uniqueId || `qr_${qrCounter}`;
+                        
+                        const fileName = `QR_${articleInfo?.savedAsArticleName || 'Article'}_Carton_${String(cartonNum).padStart(3, '0')}_${uniqueId.slice(0, 8)}.png`;
+                        
+                        // Add QR code to the archive
+                        archive.append(buffer, { name: fileName });
+                    }
+                    callback();
+                } catch (error) {
+                    callback(error);
+                }
+            }
+        });
 
-      // Send the ZIP file for download
-      res.download(zipFilePath, zipFileName, (err) => {
-        if (err) {
-          console.error('Error sending file:', err);
-          res.status(500).end();
-          return;
+        // Set up the pipeline: request -> qrStream (transform)
+        await pipeline(req, qrStream);
+
+        // Finalize the archive after the stream has been fully processed
+        await archive.finalize();
+
+    } catch (error) {
+        console.error('Error streaming QR codes:', error);
+        if (!res.headersSent) {
+            res.status(500).json({
+                result: false,
+                message: 'Failed to download QR codes',
+                error: error.message
+            });
         }
-        // Cleanup after download
-        setTimeout(() => {
-          try {
-            if (fs.existsSync(zipFilePath)) fs.unlinkSync(zipFilePath);
-          } catch (cleanupErr) {
-            console.error('Cleanup error:', cleanupErr);
-          }
-        }, 5000);
-      });
-    });
-
-    archive.on('error', (err) => {
-      res.status(500).json({
-        result: false,
-        message: "Failed to create zip archive",
-        error: err.message
-      });
-    });
-
-    archive.pipe(output);
-
-    // Add QR code images to archive
-    qrCodes.forEach((qr, idx) => {
-      if (qr.qrCodeImage) {
-        // QR code image stored as base64 data URL
-        const base64Data = qr.qrCodeImage.replace(/^data:image\/png;base64,/, '');
-        const buffer = Buffer.from(base64Data, 'base64');
-        
-        // Generate filename based on carton number and uniqueId
-        const fileName = `QR_${articleInfo?.savedAsArticleName || 'Article'}_Carton_${String(qr.cartonNumber).padStart(3, '0')}_${qr.uniqueId.slice(0, 8)}.png`;
-        archive.append(buffer, { name: fileName });
-      }
-    });
-
-    await archive.finalize();
-
-  } catch (error) {
-    res.status(500).json({
-      result: false,
-      message: 'Failed to download QR codes',
-      error: error.message
-    });
-  }
+    }
 };
 
 // ✅ Updated inventory function for your workflow
@@ -2294,7 +2288,7 @@ const getShipmentDetails = async (req, res) => {
         }
       }
     }
-    
+
     res.status(200).json({
       result: true,
       message: 'Shipment details retrieved successfully',
