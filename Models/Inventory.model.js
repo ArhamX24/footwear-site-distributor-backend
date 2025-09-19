@@ -5,19 +5,19 @@ const { Schema, model } = mongoose;
 
 const inventoryItemSchema = new Schema({
   qrCodeId: { type: Schema.Types.ObjectId, ref: 'QRCode', required: true, unique: true },
-  uniqueId: { type: String, required: true, unique: true },
-  articleName: { type: String, required: true },
-  articleDetails: {
-    colors: [String], // ✅ Changed to array
-    sizes: [Number], // ✅ Changed to array of numbers
-    numberOfCartons: { type: Number, required: true },
-    articleId: { type: Schema.Types.ObjectId }
-  },
-  status: {
-    type: String,
-    enum: ['received', 'shipped'],
-    default: 'received'
-  },
+    uniqueId: { type: String, required: true, unique: true },
+    articleName: { type: String, required: true },
+    articleDetails: {
+        colors: [String],
+        sizes: [Number],
+        numberOfCartons: { type: Number, default: 1 }, // ✅ Default to 1 as each item is one carton
+        articleId: { type: Schema.Types.ObjectId }
+    },
+    status: {
+        type: String,
+        enum: ['received', 'shipped', 'delivered'], // ✅ Reflects post-manufacturing states
+        default: 'received'
+    },
   receivedAt: Date,
   shippedAt: Date,
   receivedBy: { type: Schema.Types.ObjectId, ref: 'User' },
@@ -49,11 +49,14 @@ const formatSizeRange = (sizes) => {
 };
 
 inventorySchema.pre('save', function(next) {
-  this.quantityByStage.received = this.items.filter(i => i.status === 'received').length;
-  this.quantityByStage.shipped = this.items.filter(i => i.status === 'shipped').length;
-  this.availableQuantity = this.quantityByStage.received;
-  this.lastUpdated = new Date();
-  next();
+    this.quantityByStage.received = this.items.filter(i => i.status === 'received').length;
+    this.quantityByStage.shipped = this.items.filter(i => i.status === 'shipped').length;
+    
+    // Available quantity is now correctly calculated as received minus shipped
+    this.availableQuantity = this.quantityByStage.received - this.quantityByStage.shipped;
+    
+    this.lastUpdated = new Date();
+    next();
 });
 
 // ✅ Updated syncWithQRCode method
@@ -119,3 +122,4 @@ inventorySchema.index({ 'items.distributorId': 1 });
 const Inventory = model('Inventory', inventorySchema);
 
 export default Inventory;
+

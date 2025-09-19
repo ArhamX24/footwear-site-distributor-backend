@@ -5,18 +5,16 @@ const { Schema, model } = mongoose;
 
 const qrCodeSchema = new Schema({
   uniqueId: { type: String, required: true, unique: true, index: true },
-
-  // Root article name for simpler queries
   articleName: { type: String },
-
-  contractorInput: {
-    articleName: { type: String, required: true },
-    articleId: { type: String }, // ✅ Added articleId
-    colors: [String], // ✅ Changed to array
-    sizes: [Number], // ✅ Changed to array of numbers
-    cartonNumber: { type: Number, required: true },
-    totalCartons: { type: Number, required: true }
-  },
+    
+    contractorInput: {
+        articleName: { type: String, required: true },
+        articleId: { type: String },
+        colors: [String],
+        sizes: [Number],
+        cartonNumber: { type: Number, required: true },
+        totalCartons: { type: Number, required: true }
+    },
 
   productReference: {
     productId: { type: Schema.Types.ObjectId, ref: 'Product' },
@@ -31,13 +29,13 @@ const qrCodeSchema = new Schema({
   },
 
   qrData: { type: String, required: true },
-  qrImagePath: String,
+    qrImagePath: String,
 
   status: {
-    type: String,
-    enum: ['generated', 'manufactured', 'received', 'shipped'],
-    default: 'generated'
-  },
+        type: String,
+        enum: ['generated', 'manufactured', 'received', 'shipped', 'delivered'],
+        default: 'generated'
+    },
 
   batchInfo: {
     batchId: { type: String, required: true },

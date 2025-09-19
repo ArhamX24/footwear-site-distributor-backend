@@ -71,23 +71,11 @@ const prodcutIdValidationSchema = zod.object({
 
 const addProduct = async (req, res) => {
   try {
-    let { segment, gender, articleName, colors = '', sizes= '', variant } = req.body;
+    let { segment, gender, articleName, colors, sizes, variant } = req.body;
 
     segment = segment?.trim().toLowerCase();
     variant = variant?.trim().toLowerCase();
     articleName = articleName?.trim().toLowerCase();
-
-    // --- detect "all colors"
-    let rawColors = Array.isArray(colors) ? colors : [colors];
-    let isAllColorsAvailable = false;
-    let formattedColors;
-
-    if (rawColors.some(c => c?.trim().toLowerCase() === "all colors" || c?.trim().toLowerCase() === "all" || c?.trim().toLowerCase() === "allColors" || c?.trim().toLowerCase() === "allolors" )) {
-      isAllColorsAvailable = true;
-      formattedColors = [];
-    } else {
-      formattedColors = rawColors.map(color => color?.trim().toLowerCase()).filter(Boolean);
-    }
 
     // --- image upload section
     if (!req.files || req.files.length === 0) {
@@ -112,11 +100,8 @@ const addProduct = async (req, res) => {
 
     const newArticle = {
       name: articleName,
-      colors: formattedColors,
-      sizes,
       images: imageUrls,
       gender,
-      allColorsAvailable: isAllColorsAvailable
     };
 
     if (!existingSegment) {
@@ -150,6 +135,8 @@ const addProduct = async (req, res) => {
       .send({ result: true, message: "Variant and/or article added to existing segment" });
 
   } catch (error) {
+    console.log(error);
+    
     return res.status(statusCodes.serverError)
       .send({ result: false, message: "Error in Adding Product. Please Try Again Later", error });
   }
