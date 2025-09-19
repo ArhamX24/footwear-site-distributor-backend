@@ -2294,7 +2294,7 @@ const getShipmentDetails = async (req, res) => {
         }
       }
     }
-
+    
     res.status(200).json({
       result: true,
       message: 'Shipment details retrieved successfully',

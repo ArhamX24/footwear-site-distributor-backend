@@ -25,7 +25,9 @@ import {
     getUsersByRole,
     updateUserStats,
     getInventoryByArticleId,
-    getShipmentDetails
+    getShipmentDetails,
+    getAllShipments,
+    
 } from "../Controllers/Admin/admin.controllers.js";
 import { adminOnly } from "../MIddlewares/roleauth.middleware.js";
 import { 
@@ -44,11 +46,9 @@ import {
     getArticlesForDropdown 
 } from "../Controllers/Admin/products.controllers.js";
 import {
-  getAllShipments,
   getAutoDeleteSettings,
   updateAutoDeleteSettings,
   cleanupOldShipments,
-  viewShipmentDetails
 } from '../Controllers/Admin/shipment.controllers.js'
 import upload from "../MIddlewares/multer.middleware.js";
 import multer from "multer";
@@ -124,7 +124,7 @@ adminRouter.post("/register", register)
 // Shipment listing and details routes
 .get("/shipments", adminOnly, getAllShipments)
 .get("/shipments/:shipmentId", adminOnly, getShipmentDetails)
-.get("/shipments/view-details/:shipmentId", adminOnly, viewShipmentDetails)
+.get("/shipments/view-details/:shipmentId", adminOnly, getShipmentDetails)
 
 // Auto-delete settings management routes
 .get("/shipments/auto-delete-settings", adminOnly, getAutoDeleteSettings)

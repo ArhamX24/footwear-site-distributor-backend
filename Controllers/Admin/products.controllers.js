@@ -71,7 +71,7 @@ const prodcutIdValidationSchema = zod.object({
 
 const addProduct = async (req, res) => {
   try {
-    let { segment, gender, articleName, colors, sizes, variant } = req.body;
+    let { segment, gender, articleName, colors = '', sizes= '', variant } = req.body;
 
     segment = segment?.trim().toLowerCase();
     variant = variant?.trim().toLowerCase();
