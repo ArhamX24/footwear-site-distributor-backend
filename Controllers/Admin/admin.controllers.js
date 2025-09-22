@@ -580,7 +580,7 @@ const generateQRCodes = async (req, res) => {
         articleName,
         contractorInput: {
           articleName,
-          articleId,
+          articleId: article.articleId,
           colors: colorsArray,
           sizes: sizesArray,
           cartonNumber: i,
@@ -957,7 +957,7 @@ const updateInventoryFromQRScan = async (qrCode) => {
           colors: contractorInput.colors,
           sizes: contractorInput.sizes,
           numberOfCartons: 1, // Each scan represents one carton
-          articleId: contractorInput.articleId
+          articleId: productReference.articleId
         },
         status: 'received',
         receivedAt: new Date(),
