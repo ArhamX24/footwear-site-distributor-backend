@@ -8,6 +8,7 @@ import Variants from "../../Models/Variants.Model.js"
 import generateOrderPerformaPDF from "../../Utils/orderPerformaGenerator.js"
 import purchaseProductModel from "../../Models/Purchasedproduct.model.js"
 import mongoose from "mongoose"
+import Inventory from "../../Models/Inventory.model.js"
 
 let cookieOption = {
     path: "/",
@@ -562,8 +563,130 @@ const fetchAllDealsImages = async (req,res) => {
   }
 }
 
+const fetchArticleDetailsFromInventory = async (req, res) => {
+  try {
+    const { articleId } = req.params;
+
+    if (!articleId) {
+      return res.status(400).json({ 
+        message: "Article ID is required",
+        success: false 
+      });
+    }
+
+    // Find all inventory documents that contain items with the specified articleId
+    const inventories = await Inventory.find({
+      'items.articleDetails.articleId': articleId
+    }).populate('productId', 'name description'); // Optional: populate product details
+
+    if (!inventories || inventories.length === 0) {
+      return res.status(404).json({ 
+        message: "No inventory found for this article ID",
+        success: false 
+      });
+    }
+
+    // Aggregate data from all matching items across inventories
+    let allColors = new Set();
+    let allSizes = new Set();
+    let totalAvailableStock = 0;
+    let articleName = '';
+    let receivedItems = 0;
+    let shippedItems = 0;
+
+    inventories.forEach(inventory => {
+      // Filter items that match the articleId
+      const matchingItems = inventory.items.filter(item => 
+        item.articleDetails.articleId && 
+        item.articleDetails.articleId.toString() === articleId.toString()
+      );
+
+      matchingItems.forEach(item => {
+        // Set article name (take from first item)
+        if (!articleName && item.articleName) {
+          articleName = item.articleName;
+        }
+
+        // Collect colors
+        if (item.articleDetails.colors && Array.isArray(item.articleDetails.colors)) {
+          item.articleDetails.colors.forEach(color => {
+            if (color && color !== 'Unknown') {
+              allColors.add(color);
+            }
+          });
+        }
+
+        // Collect sizes
+        if (item.articleDetails.sizes && Array.isArray(item.articleDetails.sizes)) {
+          item.articleDetails.sizes.forEach(size => {
+            if (size && size !== 0) {
+              allSizes.add(size);
+            }
+          });
+        }
+
+        // Count items by status
+        if (item.status === 'received') {
+          receivedItems++;
+        } else if (item.status === 'shipped') {
+          shippedItems++;
+        }
+      });
+    });
+
+    // Calculate available stock (received - shipped)
+    totalAvailableStock = receivedItems - shippedItems;
+
+    // Convert Sets to sorted arrays
+    const colors = Array.from(allColors).sort();
+    const sizes = Array.from(allSizes).sort((a, b) => a - b);
+
+    // Helper function to format size range
+    const formatSizeRange = (sizes) => {
+      if (!sizes || sizes.length === 0) return 'N/A';
+      if (sizes.length === 1) return sizes[0].toString();
+      
+      const sortedSizes = [...sizes].sort((a, b) => a - b);
+      return `${sortedSizes[0]}X${sortedSizes[sortedSizes.length - 1]}`;
+    };
+
+    const response = {
+      success: true,
+      data: {
+        articleId,
+        articleName: articleName || 'Unknown Article',
+        colors: colors.length > 0 ? colors : ['N/A'],
+        sizes: sizes.length > 0 ? sizes : [0],
+        sizeRange: formatSizeRange(sizes),
+        availableStock: Math.max(0, totalAvailableStock), // Ensure non-negative
+        stockBreakdown: {
+          received: receivedItems,
+          shipped: shippedItems,
+          available: Math.max(0, totalAvailableStock)
+        },
+        totalInventoryDocuments: inventories.length,
+        lastUpdated: inventories.reduce((latest, inv) => {
+          return (!latest || inv.lastUpdated > latest) ? inv.lastUpdated : latest;
+        }, null)
+      }
+    };
+
+    return res.status(200).json(response);
+
+  } catch (error) {
+    console.error('Error fetching article details from inventory:', error);
+    return res.status(500).json({ 
+      message: "Error fetching article details from inventory",
+      success: false,
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+export default fetchArticleDetailsFromInventory;
 
 
-export {login, purchaseProduct, getAllProducts,fetchFilters, fetchProductData, fetchAllDealsImages, generateOrderPerforma, getDistributor}
+
+export {login, purchaseProduct, getAllProducts,fetchFilters, fetchProductData, fetchAllDealsImages, generateOrderPerforma, getDistributor, fetchArticleDetailsFromInventory}
 
 
