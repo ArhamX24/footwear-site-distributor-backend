@@ -4,13 +4,12 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import dbConnect from "./DB/DbConnect.js";
 
-// ✅ Import all route modules
 import adminRouter from "./Routes/admin.router.js";
 import userRouter from "./Routes/user.router.js";
 import AuthRouter from "./Routes/auth.router.js";
-import contractorRouter from "./Routes/contractor.router.js";  // ✅ New
-import warehouseRouter from "./Routes/warehouse.router.js";    // ✅ New
-import shipmentRouter from "./Routes/shipment.router.js";      // ✅ New
+import contractorRouter from "./Routes/contractor.router.js";  
+import warehouseRouter from "./Routes/warehouse.router.js";    
+import shipmentRouter from "./Routes/shipment.router.js";      
 
 import cron from "node-cron";
 import dealsModel from "./Models/Deals.model.js";
@@ -26,6 +25,7 @@ server.use(cookieParser());
 
 const allowedOrigins = [
   "http://www.pinkeyfootwear.in",
+  "https://pinkeyfootwear.netlify.app",
   "https://pinkey-demo.netlify.app",
   "http://localhost:5173",
   "http://10.214.28.84:5173/"
