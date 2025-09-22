@@ -24,12 +24,14 @@ server.use(express.urlencoded({ extended: true }));
 server.use(cookieParser());
 
 const allowedOrigins = [
-  "http://www.pinkeyfootwear.in",
+  "https://pinkeyfootwear.in",
+  "https://www.pinkeyfootwear.in",
   "https://pinkeyfootwear.netlify.app",
   "https://pinkey-demo.netlify.app",
   "http://localhost:5173",
-  "http://10.214.28.84:5173/"
+  "http://localhost:3000",
 ];
+
 
 server.use(cors({
   origin: function (origin, callback) {
@@ -51,9 +53,9 @@ server.use(cors({
 server.use("/api/v1/auth", AuthRouter);                    // ✅ Universal auth routes
 server.use("/api/v1/admin", adminRouter);                  // ✅ Admin-only routes
 server.use("/api/v1/distributor", userRouter);             // ✅ Distributor-only routes
-server.use("/api/v1/contractor", contractorRouter);        // ✅ New - Contractor routes
-server.use("/api/v1/warehouse", warehouseRouter);          // ✅ New - Warehouse inspector routes
-server.use("/api/v1/shipment", shipmentRouter);            // ✅ New - Shipment manager routes
+server.use("/api/v1/contractor", contractorRouter);        // ✅ Contractor routes
+server.use("/api/v1/warehouse", warehouseRouter);          // ✅ Warehouse inspector routes
+server.use("/api/v1/shipment", shipmentRouter);            // ✅ Shipment manager routes
 
 // ✅ Health check endpoint
 server.get("/api/v1/health", (req, res) => {
