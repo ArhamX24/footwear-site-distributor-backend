@@ -11,7 +11,7 @@ const inventoryItemSchema = new Schema({
         colors: [String],
         sizes: [Number],
         numberOfCartons: { type: Number, default: 1 }, // ✅ Default to 1 as each item is one carton
-        articleId: { type: Schema.Types.ObjectId }
+        articleId: { type: Schema.Types.ObjectId, ref: "Product"}
     },
     status: {
         type: String,

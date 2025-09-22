@@ -535,7 +535,6 @@ const generateQRCodes = async (req, res) => {
   try {
     const { articleId, articleName, colors, sizes, numberOfQRs } = req.body;
     const userId = req.user?._id;
-
     // Basic validation
     if (!articleId || !articleName || !colors || !sizes || !numberOfQRs) {
       return res.status(400).json({
@@ -560,6 +559,7 @@ const generateQRCodes = async (req, res) => {
       { $limit: 1 }
     ]);
 
+
     if (!articleData.length) {
       return res.status(404).json({ result: false, message: 'Article not found' });
     }
@@ -580,6 +580,7 @@ const generateQRCodes = async (req, res) => {
         articleName,
         contractorInput: {
           articleName,
+          articleId,
           colors: colorsArray,
           sizes: sizesArray,
           cartonNumber: i,
@@ -928,7 +929,7 @@ const downloadQRCodes = async (req, res) => {
 // ✅ Updated inventory function for your workflow
 // ✅ Updated inventory function for your workflow
 const updateInventoryFromQRScan = async (qrCode) => {
-  const { productReference, contractorInput, _id, uniqueId, articleName, status } = qrCode;
+  const { productReference, contractorInput, _id, uniqueId, articleName, status} = qrCode;
 
   if (!productReference?.productId) {
     throw new Error('QR code is not linked to a valid product.');
