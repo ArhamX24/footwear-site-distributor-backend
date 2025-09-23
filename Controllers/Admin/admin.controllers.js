@@ -87,7 +87,6 @@ let cookieOption = {
 // ✅ Generate clean QR with HTML labels (converted to image)
 const generateQRWithLabel = async (qrString, labelData) => {
   try {
-    console.log('Generating QR with labels...');
     
     // ✅ First generate pure QR code
     const qrCodeDataURL = await QRCodeLib.toDataURL(qrString, {
@@ -157,11 +156,9 @@ const generateQRWithLabel = async (qrString, labelData) => {
 
     // ✅ Convert to data URL
     const finalImage = canvas.toDataURL('image/png');
-    console.log('✅ QR with labels generated successfully');
     return finalImage;
 
   } catch (error) {
-    console.error('Error generating QR with labels:', error);
     // ✅ Fallback to pure QR
     return await QRCodeLib.toDataURL(qrString, {
       width: 200,
@@ -299,7 +296,6 @@ const register = async (req,res) => {
     });
 
   } catch (error) {
-    console.error('Error registering admin:', error);
     res.status(statusCodes.serverError).json({
       result: false,
       message: "Failed to register admin",
@@ -679,7 +675,6 @@ const generateQRCodes = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error generating QR codes:', error);
     res.status(500).json({
       result: false,
       message: 'QR generation failed',
@@ -874,7 +869,6 @@ const downloadQRCodes = async (req, res) => {
 
         // Handle potential errors during archiving
         archive.on('error', (err) => {
-            console.error('Archive error:', err);
             res.status(500).send({ error: 'Failed to create zip archive' });
         });
 
@@ -915,7 +909,6 @@ const downloadQRCodes = async (req, res) => {
         await archive.finalize();
 
     } catch (error) {
-        console.error('Error streaming QR codes:', error);
         if (!res.headersSent) {
             res.status(500).json({
                 result: false,
@@ -1019,7 +1012,6 @@ const updateInventoryOnShipment = async (qrCode, user, distributorDetails) => {
     return inventory;
 
   } catch (error) {
-    console.error('Error updating inventory on shipment:', error);
     throw error;
   }
 };
@@ -2112,7 +2104,6 @@ const createOrUpdateShipment = async (qrCode, user, distributorDetails) => {
     return shipment;
 
   } catch (error) {
-    console.error('Error creating/updating shipment:', error);
     throw error;
   }
 };
@@ -2173,7 +2164,6 @@ const updateInventoryAfterShipment = async (qrCode) => {
     return inventory;
 
   } catch (error) {
-    console.error('Error updating inventory after shipment:', error);
     throw error;
   }
 };
@@ -2264,7 +2254,6 @@ const getShipmentDetails = async (req, res) => {
             }
           }
         } catch (error) {
-          console.log('Error fetching article image:', error);
         }
       }
     }
@@ -2276,7 +2265,6 @@ const getShipmentDetails = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error fetching shipment details:', error);
     res.status(500).json({
       result: false,
       message: 'Failed to fetch shipment details',
@@ -2325,7 +2313,6 @@ const getAllShipments = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error fetching shipments:', error);
     res.status(500).json({
       result: false,
       message: 'Failed to fetch shipments',
@@ -2395,7 +2382,6 @@ const getUsersByRole = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error getting users by role:', error);
     res.status(statusCodes.serverError).json({
       result: false,
       message: "Failed to retrieve users"
@@ -2443,7 +2429,6 @@ const updateUserStats = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error updating user stats:', error);
     res.status(statusCodes.serverError).json({
       result: false,
       message: "Failed to update user stats"
@@ -2476,7 +2461,6 @@ const deleteUser = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error deleting user:', error);
     res.status(statusCodes.serverError).json({
       result: false,
       message: "Failed to delete user"
@@ -2558,7 +2542,6 @@ const getInventoryByArticleId = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error fetching inventory by article ID:', error);
     res.status(500).json({
       result: false,
       message: 'Failed to fetch inventory',
@@ -2828,7 +2811,6 @@ const generateShipmentReceiptPDF = async (req, res) => {
     doc.end();
 
   } catch (error) {
-    console.error('Error generating PDF receipt:', error);
     
     // If response headers haven't been sent yet, send JSON error
     if (!res.headersSent) {

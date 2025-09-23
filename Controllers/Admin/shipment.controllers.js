@@ -265,7 +265,6 @@ const setupAutoCleanup = () => {
         });
 
         if (result.deletedCount > 0) {
-          console.log(`Auto-cleanup: Deleted ${result.deletedCount} old shipments`);
           settings.lastCleanup = new Date();
           await settings.save();
         }

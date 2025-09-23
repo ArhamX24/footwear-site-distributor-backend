@@ -135,8 +135,7 @@ const addProduct = async (req, res) => {
       .send({ result: true, message: "Variant and/or article added to existing segment" });
 
   } catch (error) {
-    console.log(error);
-    
+
     return res.status(statusCodes.serverError)
       .send({ result: false, message: "Error in Adding Product. Please Try Again Later", error });
   }
@@ -623,7 +622,6 @@ const getArticlesForDropdown = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error fetching articles:', error);
     return res.status(500).json({
       result: false,
       message: "Error fetching articles",

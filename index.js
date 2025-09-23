@@ -124,12 +124,10 @@ cron.schedule("* * * * *", async () => {
 
 // ✅ Enhanced error handling for uncaught exceptions
 process.on('uncaughtException', (error) => {
-  console.error('❌ Uncaught Exception:', error);
   process.exit(1);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
   process.exit(1);
 });
 
@@ -142,7 +140,6 @@ dbConnect()
     });
   })
   .catch((err) => {
-    console.error("❌ Database connection failed:", err);
     process.exit(1);
   });
 

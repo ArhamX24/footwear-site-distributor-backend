@@ -37,7 +37,6 @@ const addToInventory = async (qrCode, scannedBy, location, notes) => {
     });
 
     await inventory.save();
-    console.log(`✅ Added carton ${qrCode.uniqueId} to inventory`);
     
   } catch (error) {
     console.error('Error adding to inventory:', error);
@@ -105,7 +104,6 @@ const removeFromInventoryAndCreateShipment = async (qrCode, scannedBy, distribut
     await shipment.save();
 
   } catch (error) {
-    console.error('Error in inventory/shipment operation:', error);
     throw error;
   }
 };

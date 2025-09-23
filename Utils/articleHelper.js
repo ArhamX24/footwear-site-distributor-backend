@@ -162,7 +162,6 @@ const createNewArticle = async (articleName, colors, sizes, userId) => {
     };
 
   } catch (error) {
-    console.error('Error creating new article:', error);
     throw new Error('Failed to create new article');
   }
 };

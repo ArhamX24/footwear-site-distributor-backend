@@ -36,8 +36,6 @@ const uploadOnCloudinary = async (filePath) => {
 
     return result;
   } catch (error) {
-    console.error("❌ Cloudinary upload failed:", error.message || error);
-
     try {
       const uploadsDir = path.resolve("Uploads");
       const relative = path.relative(uploadsDir, filePath);

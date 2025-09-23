@@ -48,9 +48,7 @@ export const authorizeRoles = (allowedRoles) => {
             req.user = user;
             next();
 
-        } catch (error) {
-            console.log(error);
-            
+        } catch (error) {            
             if (error.name === 'TokenExpiredError') {
                 return res.status(401).json({ 
                     result: false, 

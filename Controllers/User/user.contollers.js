@@ -102,24 +102,38 @@ const login = async (req,res) => {
 
 const getDistributor = async (req,res) => {
   try {
-    res.status(statusCodes.success).send({result: true, userdata: req?.distributor})
+    res.status(statusCodes.success).send({result: true, userdata: req?.user})
   } catch (error) {
     return res.status(500).send({result: false, message: "Error Getting Distributor"})
   }
 }
 
-const purchaseProduct = async (req,res) => {
-   try {
+const purchaseProduct = async (req, res) => {
+  try {
     // Assume distributor details are attached to req (for example, via a middleware)
-    const distributor = req.distributor; // distributor should include billNo, partyName, phoneNo, _id, etc.
+    const distributor = req.user; // distributor should include billNo, partyName, phoneNo, _id, etc.
+    const distributorId = distributor._id;
+
     if (!distributor) {
       return res.status(400).json({ message: "Distributor details missing" });
     }
+
+    // Fetch the distributor from User model to get complete details
+    const distributorUser = await userModel.findById(distributorId);
     
+    if (!distributorUser) {
+      return res.status(404).json({ message: "Distributor not found" });
+    }
+
+    // Check if the user is actually a distributor
+    if (distributorUser.role !== 'distributor') {
+      return res.status(403).json({ message: "User is not a distributor" });
+    }
+
     // Expect an array of orders in the request body
     const orders = req?.body.items;
-    const orderDate = req?.body.orderDate
-  
+    const orderDate = req?.body.orderDate;
+
     if (!orders || !Array.isArray(orders) || orders.length === 0) {
       return res.status(400).json({ message: "No orders provided" });
     }
@@ -140,15 +154,19 @@ const purchaseProduct = async (req,res) => {
 
     // Create and save the purchase order to the database
     const newPurchaseOrder = await purchaseProductModel.create({
-      distributorId: distributor._id,
+      distributorId: distributorUser._id,
       orderId: new mongoose.Types.ObjectId(), // your generated orderId
       orderDate: orderDate,
-      billNo: distributor.billNo,           // from distributor details
-      partyName: distributor.partyName,     // from distributor details
-      phoneNo: distributor.phoneNo,                 // or set from req.body if provided
-      items,                                // our mapped items array
-      isFulfiled: false,                    // default, or update as needed
+      billNo: distributorUser.distributorDetails.billNo,           // from distributor details in User model
+      partyName: distributorUser.distributorDetails.partyName,     // from distributor details in User model
+      phoneNo: distributorUser.phoneNo,                           // from common phoneNo field
+      items,                                                      // our mapped items array
+      isFulfiled: false,                                          // default, or update as needed
     });
+
+    // Update the distributor's purchases array with the new order
+    distributorUser.distributorDetails.purchases.push(newPurchaseOrder._id);
+    await distributorUser.save();
 
     // Return success along with a download URL for the Order Performa PDF.
     // (Assuming you have an endpoint `/api/v1/distributor/orders/download/:orderId` for PDF download.)
@@ -164,7 +182,7 @@ const purchaseProduct = async (req,res) => {
       message: "Error while placing order. Please try again later.",
     });
   }
-}
+};
 
 let generateOrderPerforma = async (req, res) => {
 try {
@@ -459,7 +477,6 @@ const getAllProducts = async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Error fetching products:", err);
     res.status(500).json({ 
       result: false, 
       message: "Error fetching products",
@@ -674,7 +691,6 @@ const fetchArticleDetailsFromInventory = async (req, res) => {
     return res.status(200).json(response);
 
   } catch (error) {
-    console.error('Error fetching article details from inventory:', error);
     return res.status(500).json({ 
       message: "Error fetching article details from inventory",
       success: false,
