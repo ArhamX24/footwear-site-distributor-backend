@@ -1477,6 +1477,28 @@ const getAllInventory = async (req, res) => {
       .skip(parseInt(offset))
       .lean();
 
+    // Handle empty inventory case
+    if (!inventories || inventories.length === 0) {
+      return res.status(200).json({
+        result: true,
+        message: 'No inventory data found',
+        data: {
+          overallStats: {
+            totalProducts: 0,
+            totalItems: 0,
+            totalQRs: 0,
+            totalScans: 0
+          },
+          inventoryData: [],
+          pagination: {
+            limit: parseInt(limit),
+            offset: parseInt(offset),
+            hasMore: false
+          }
+        }
+      });
+    }
+
     // Transform data for frontend consumption
     const inventoryData = inventories.map(inventory => {
       // Calculate QR statistics
@@ -1524,22 +1546,22 @@ const getAllInventory = async (req, res) => {
       }, {});
 
       return {
-        productId: inventory.productId._id,
+        productId: inventory?.productId?._id,
         productInfo: {
-          segment: inventory.productId.segment,
-          totalVariants: inventory.productId.variants?.length || 0,
-          totalArticles: inventory.productId.variants?.reduce((sum, variant) => 
+          segment: inventory?.productId?.segment,
+          totalVariants: inventory?.productId?.variants?.length || 0,
+          totalArticles: inventory?.productId?.variants?.reduce((sum, variant) => 
             sum + (variant.articles?.length || 0), 0) || 0
         },
         inventoryMetrics: {
-          totalQuantity: inventory.totalQuantity,
-          availableQuantity: inventory.availableQuantity,
-          quantityByStage: inventory.quantityByStage
+          totalQuantity: inventory?.totalQuantity,
+          availableQuantity: inventory?.availableQuantity,
+          quantityByStage: inventory?.quantityByStage
         },
         qrCodeStats: qrStats,
         statusBreakdown,
         articleBreakdown,
-        lastUpdated: inventory.lastUpdated
+        lastUpdated: inventory?.lastUpdated
       };
     });
 
@@ -1560,7 +1582,7 @@ const getAllInventory = async (req, res) => {
         pagination: {
           limit: parseInt(limit),
           offset: parseInt(offset),
-          hasMore: inventoryData.length === parseInt(limit)
+          hasMore: inventories.length === parseInt(limit)
         }
       }
     });
