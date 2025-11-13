@@ -1465,6 +1465,10 @@ const getAllInventory = async (req, res) => {
   try {
     const { limit = 50, offset = 0, sortBy = 'lastUpdated' } = req.query;
 
+    // ✅ Whitelist allowed sort fields to prevent MongoDB errors
+    const allowedSortFields = ['lastUpdated', 'totalQuantity', 'availableQuantity', 'createdAt'];
+    const validSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'lastUpdated';
+
     // Get all inventory records with product and QR data
     const inventories = await Inventory.find({})
       .populate('productId', 'segment variants')
@@ -1472,7 +1476,7 @@ const getAllInventory = async (req, res) => {
         path: 'items.qrCodeId',
         select: 'status totalScans batchId createdAt'
       })
-      .sort({ [sortBy]: -1 })
+      .sort({ [validSortBy]: -1 })
       .limit(parseInt(limit))
       .skip(parseInt(offset))
       .lean();
@@ -1501,9 +1505,14 @@ const getAllInventory = async (req, res) => {
 
     // Transform data for frontend consumption
     const inventoryData = inventories.map(inventory => {
+      // ✅ Add null checks for safety
+      if (!inventory || !inventory.items) {
+        return null;
+      }
+
       // Calculate QR statistics
       const qrStats = inventory.items.reduce((acc, item) => {
-        if (item.qrCodeId) {
+        if (item && item.qrCodeId) {
           acc.totalQRs++;
           acc.totalScans += item.qrCodeId.totalScans || 0;
           if (item.qrCodeId.totalScans > 0) {
@@ -1515,12 +1524,16 @@ const getAllInventory = async (req, res) => {
 
       // Status breakdown
       const statusBreakdown = inventory.items.reduce((acc, item) => {
-        acc[item.status] = (acc[item.status] || 0) + 1;
+        if (item && item.status) {
+          acc[item.status] = (acc[item.status] || 0) + 1;
+        }
         return acc;
       }, {});
 
       // Article breakdown
       const articleBreakdown = inventory.items.reduce((acc, item) => {
+        if (!item || !item.articleName) return acc;
+        
         const key = item.articleName;
         if (!acc[key]) {
           acc[key] = { 
@@ -1546,31 +1559,31 @@ const getAllInventory = async (req, res) => {
       }, {});
 
       return {
-        productId: inventory?.productId?._id,
+        productId: inventory?.productId?._id || null,
         productInfo: {
-          segment: inventory?.productId?.segment,
+          segment: inventory?.productId?.segment || 'Unknown',
           totalVariants: inventory?.productId?.variants?.length || 0,
           totalArticles: inventory?.productId?.variants?.reduce((sum, variant) => 
             sum + (variant.articles?.length || 0), 0) || 0
         },
         inventoryMetrics: {
-          totalQuantity: inventory?.totalQuantity,
-          availableQuantity: inventory?.availableQuantity,
-          quantityByStage: inventory?.quantityByStage
+          totalQuantity: inventory?.totalQuantity || 0,
+          availableQuantity: inventory?.availableQuantity || 0,
+          quantityByStage: inventory?.quantityByStage || {}
         },
         qrCodeStats: qrStats,
         statusBreakdown,
         articleBreakdown,
-        lastUpdated: inventory?.lastUpdated
+        lastUpdated: inventory?.lastUpdated || null
       };
-    });
+    }).filter(Boolean); // ✅ Remove null entries
 
     // Calculate overall statistics
     const overallStats = inventoryData.reduce((acc, data) => ({
       totalProducts: acc.totalProducts + 1,
-      totalItems: acc.totalItems + data.inventoryMetrics.totalQuantity,
-      totalQRs: acc.totalQRs + data.qrCodeStats.totalQRs,
-      totalScans: acc.totalScans + data.qrCodeStats.totalScans
+      totalItems: acc.totalItems + (data.inventoryMetrics?.totalQuantity || 0),
+      totalQRs: acc.totalQRs + (data.qrCodeStats?.totalQRs || 0),
+      totalScans: acc.totalScans + (data.qrCodeStats?.totalScans || 0)
     }), { totalProducts: 0, totalItems: 0, totalQRs: 0, totalScans: 0 });
 
     return res.status(200).json({
@@ -1588,6 +1601,7 @@ const getAllInventory = async (req, res) => {
     });
 
   } catch (error) {
+    console.error('❌ Error in getAllInventory:', error);
     res.status(500).json({
       result: false,
       message: 'Failed to get all inventory data',

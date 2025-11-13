@@ -32,7 +32,6 @@ const allowedOrigins = [
   "http://localhost:3000",
 ];
 
-
 server.use(cors({
   origin: function (origin, callback) {
     // Allow requests with no origin like mobile apps or curl requests
@@ -46,16 +45,16 @@ server.use(cors({
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  optionsSuccessStatus: 200 // For legacy browser support
+  optionsSuccessStatus: 200
 }));
 
 // ✅ Updated route mounting - Role-based API structure
-server.use("/api/v1/auth", AuthRouter);                    // ✅ Universal auth routes
-server.use("/api/v1/admin", adminRouter);                  // ✅ Admin-only routes
-server.use("/api/v1/distributor", userRouter);             // ✅ Distributor-only routes
-server.use("/api/v1/contractor", contractorRouter);        // ✅ Contractor routes
-server.use("/api/v1/warehouse", warehouseRouter);          // ✅ Warehouse inspector routes
-server.use("/api/v1/shipment", shipmentRouter);            // ✅ Shipment manager routes
+server.use("/api/v1/auth", AuthRouter);
+server.use("/api/v1/admin", adminRouter);
+server.use("/api/v1/distributor", userRouter);
+server.use("/api/v1/contractor", contractorRouter);
+server.use("/api/v1/warehouse", warehouseRouter);
+server.use("/api/v1/shipment", shipmentRouter);
 
 // ✅ Health check endpoint
 server.get("/api/v1/health", (req, res) => {
@@ -74,61 +73,115 @@ server.get("/api/v1/health", (req, res) => {
   });
 });
 
-// Cron job for expired deals processing
+// ✅ FIXED: Cron job with proper error handling
 const processExpiredDeals = async () => {
   try {
     // Find all deals where expireAt has passed
     const expiredDeals = await dealsModel.find({ 
       expireAt: { $lt: new Date() } 
-    });
+    }).lean();
+    
+    if (!expiredDeals || expiredDeals.length === 0) {
+      return; // No expired deals to process
+    }
+
+    console.log(`📦 Processing ${expiredDeals.length} expired deals...`);
     
     for (const deal of expiredDeals) {
-      const articleId = deal.articleId;
-      
-      if (articleId) {
-        // Update the specific article in the nested structure
-        await productModel.updateOne(
+      try {
+        const articleId = deal.articleId;
+        
+        // ✅ Validate articleId exists and is valid ObjectId
+        if (!articleId || !mongoose.Types.ObjectId.isValid(articleId)) {
+          console.warn(`⚠️ Invalid articleId in deal ${deal._id}`);
+          // Delete invalid deal
+          await dealsModel.deleteOne({ _id: deal._id });
+          continue;
+        }
+
+        // ✅ FIXED: Corrected MongoDB update query
+        const updateResult = await productModel.updateOne(
           { 
-            "variants.articles._id": articleId 
+            "variants.articles._id": new mongoose.Types.ObjectId(articleId)
           },
           { 
             $set: { 
-              "variants.$[].articles.$[article].indeal": false 
+              "variants.$[variant].articles.$[article].indeal": false 
             },
             $unset: { 
-              "variants.$[].articles.$[article].deal": "" 
+              "variants.$[variant].articles.$[article].deal": "" 
             }
           },
           {
             arrayFilters: [
-              { "article._id": articleId }
+              { "variant.articles._id": new mongoose.Types.ObjectId(articleId) },
+              { "article._id": new mongoose.Types.ObjectId(articleId) }
             ]
           }
         );
+
+        // Delete the expired deal
+        await dealsModel.deleteOne({ _id: deal._id });
+        
+        console.log(`✅ Processed expired deal for article ${articleId}`);
+        
+      } catch (dealError) {
+        console.error(`❌ Error processing deal ${deal._id}:`, dealError.message);
+        // Continue with next deal instead of crashing
+        continue;
       }
-      
-      // Delete the expired deal
-      await dealsModel.deleteOne({ _id: deal._id });
     }
     
+    console.log(`✅ Finished processing expired deals`);
     
   } catch (error) {
-    console.error("❌ Error processing expired deals:", error);
+    console.error("❌ Critical error in processExpiredDeals:", error.message);
+    // Don't throw - just log and continue
+    // This prevents the cron job from crashing the server
   }
 };
 
 // Run every minute to check for expired deals
+// ✅ Wrapped in try-catch to prevent cron crashes
 cron.schedule("* * * * *", async () => {
-  await processExpiredDeals();
+  try {
+    await processExpiredDeals();
+  } catch (error) {
+    console.error("❌ Cron job execution error:", error.message);
+  }
 });
 
 // ✅ Enhanced error handling for uncaught exceptions
 process.on('uncaughtException', (error) => {
-  process.exit(1);
+  console.error('💥 UNCAUGHT EXCEPTION:', error);
+  console.error('Stack:', error.stack);
+  
+  // Give time to log before exiting
+  setTimeout(() => {
+    process.exit(1);
+  }, 1000);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  process.exit(1);
+  console.error('💥 UNHANDLED REJECTION at:', promise);
+  console.error('Reason:', reason);
+  
+  // Give time to log before exiting
+  setTimeout(() => {
+    process.exit(1);
+  }, 1000);
+});
+
+// ✅ Graceful shutdown handler
+process.on('SIGTERM', () => {
+  console.log('👋 SIGTERM received, shutting down gracefully...');
+  server.close(() => {
+    console.log('✅ Server closed');
+    mongoose.connection.close(false, () => {
+      console.log('✅ MongoDB connection closed');
+      process.exit(0);
+    });
+  });
 });
 
 // Database connection and server startup
@@ -137,9 +190,12 @@ dbConnect()
     const PORT = process.env.PORT || 5000;
     server.listen(PORT, () => {
       console.log(`✅ Server running on port ${PORT}`);
+      console.log(`✅ Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`✅ CORS enabled for: ${allowedOrigins.join(', ')}`);
     });
   })
   .catch((err) => {
+    console.error('❌ Failed to connect to database:', err);
     process.exit(1);
   });
 
