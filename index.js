@@ -84,8 +84,6 @@ const processExpiredDeals = async () => {
     if (!expiredDeals || expiredDeals.length === 0) {
       return; // No expired deals to process
     }
-
-    console.log(`📦 Processing ${expiredDeals.length} expired deals...`);
     
     for (const deal of expiredDeals) {
       try {
@@ -123,10 +121,9 @@ const processExpiredDeals = async () => {
         // Delete the expired deal
         await dealsModel.deleteOne({ _id: deal._id });
         
-        console.log(`✅ Processed expired deal for article ${articleId}`);
         
       } catch (dealError) {
-        console.error(`❌ Error processing deal ${deal._id}:`, dealError.message);
+        console.error(`Error processing deal ${deal._id}:`, dealError.message);
         // Continue with next deal instead of crashing
         continue;
       }
@@ -135,7 +132,7 @@ const processExpiredDeals = async () => {
     console.log(`✅ Finished processing expired deals`);
     
   } catch (error) {
-    console.error("❌ Critical error in processExpiredDeals:", error.message);
+    console.error("Critical error in processExpiredDeals:", error.message);
     // Don't throw - just log and continue
     // This prevents the cron job from crashing the server
   }
@@ -147,15 +144,12 @@ cron.schedule("* * * * *", async () => {
   try {
     await processExpiredDeals();
   } catch (error) {
-    console.error("❌ Cron job execution error:", error.message);
+    console.error(error.message);
   }
 });
 
 // ✅ Enhanced error handling for uncaught exceptions
-process.on('uncaughtException', (error) => {
-  console.error('💥 UNCAUGHT EXCEPTION:', error);
-  console.error('Stack:', error.stack);
-  
+process.on('uncaughtException', (error) => {  
   // Give time to log before exiting
   setTimeout(() => {
     process.exit(1);
@@ -176,7 +170,6 @@ process.on('unhandledRejection', (reason, promise) => {
 process.on('SIGTERM', () => {
   console.log('👋 SIGTERM received, shutting down gracefully...');
   server.close(() => {
-    console.log('✅ Server closed');
     mongoose.connection.close(false, () => {
       console.log('✅ MongoDB connection closed');
       process.exit(0);
@@ -188,14 +181,9 @@ process.on('SIGTERM', () => {
 dbConnect()
   .then(() => {
     const PORT = process.env.PORT || 5000;
-    server.listen(PORT, () => {
-      console.log(`✅ Server running on port ${PORT}`);
-      console.log(`✅ Environment: ${process.env.NODE_ENV || 'development'}`);
-      console.log(`✅ CORS enabled for: ${allowedOrigins.join(', ')}`);
-    });
+    server.listen(PORT, () => {});
   })
   .catch((err) => {
-    console.error('❌ Failed to connect to database:', err);
     process.exit(1);
   });
 

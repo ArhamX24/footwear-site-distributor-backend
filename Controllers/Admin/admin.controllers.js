@@ -1576,7 +1576,7 @@ const getAllInventory = async (req, res) => {
         articleBreakdown,
         lastUpdated: inventory?.lastUpdated || null
       };
-    }).filter(Boolean); // ✅ Remove null entries
+    }).filter(Boolean); 
 
     // Calculate overall statistics
     const overallStats = inventoryData.reduce((acc, data) => ({
@@ -1601,7 +1601,7 @@ const getAllInventory = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Error in getAllInventory:', error);
+    console.error('Error in getAllInventory:', error);
     res.status(500).json({
       result: false,
       message: 'Failed to get all inventory data',
