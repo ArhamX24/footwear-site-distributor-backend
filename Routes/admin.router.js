@@ -33,7 +33,8 @@ import { adminOnly } from "../MIddlewares/roleauth.middleware.js";
 import { 
     addProduct,
     importProductsFromExcel,
-    deleteProduct, 
+    deleteProduct,
+    updateProduct, 
     getAllProdcuts, 
     addBestDeals, 
     deleteDeals, 
@@ -65,6 +66,7 @@ adminRouter.post("/register", register)
 // Product management routes
 .post("/products/addproduct", upload.array('images', 10), addProduct)
 .delete("/products/deleteproduct/:productid", deleteProduct)
+.put("/products/updateproduct/:productid", upload.array('images', 10), updateProduct)
 .get("/products/getproducts", getAllProdcuts)
 .post("/products/import-excel", upload.single('excel'), importProductsFromExcel)
 .get("/products/articles", getArticlesForDropdown)

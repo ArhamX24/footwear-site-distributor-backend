@@ -8,6 +8,7 @@ import zod from 'zod';
 import xlsx from "xlsx";
 import path from 'path';
 import fs from 'fs'
+import mongoose from "mongoose";
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 
@@ -291,6 +292,182 @@ const deleteProduct = async (req, res) => {
       .send({
         result: false,
         message: "Error deleting. Please try again later.",
+      });
+  }
+};
+
+// Add this to your products.controllers.js file
+
+const updateProduct = async (req, res) => {
+  try {
+    const { productid } = req.params;
+    let { name, segment, gender, variantName, existingImages } = req.body;
+
+    // Normalize inputs
+    name = name?.trim().toLowerCase();
+    segment = segment?.trim().toLowerCase();
+    gender = gender?.trim().toLowerCase();
+    variantName = variantName?.trim().toLowerCase();
+
+    // Parse existing images if it's a string
+    if (typeof existingImages === 'string') {
+      try {
+        existingImages = JSON.parse(existingImages);
+      } catch (e) {
+        existingImages = [];
+      }
+    }
+
+    // Validate product ID
+    if (!mongoose.Types.ObjectId.isValid(productid)) {
+      return res.status(statusCodes.badRequest)
+        .send({ result: false, message: "Invalid product ID" });
+    }
+
+    // Find the product and its location in the schema
+    const allProducts = await productModel.find({});
+    let targetProduct = null;
+    let targetSegment = null;
+    let targetVariant = null;
+    let articleIndex = -1;
+
+    for (const prod of allProducts) {
+      for (const variant of prod.variants) {
+        const artIndex = variant.articles.findIndex(
+          art => art._id.toString() === productid
+        );
+        
+        if (artIndex !== -1) {
+          targetProduct = prod;
+          targetSegment = prod;
+          targetVariant = variant;
+          articleIndex = artIndex;
+          break;
+        }
+      }
+      if (targetProduct) break;
+    }
+
+    if (!targetProduct || articleIndex === -1) {
+      return res.status(statusCodes.notFound)
+        .send({ result: false, message: "Product not found" });
+    }
+
+    // Handle new image uploads
+    let newImageUrls = [];
+    if (req.files && req.files.length > 0) {
+      const uploadPromises = req.files.map((file) => uploadOnCloudinary(file.path));
+      
+      try {
+        const uploadResults = await Promise.all(uploadPromises);
+        newImageUrls = uploadResults.map((file) => file.secure_url);
+      } catch (uploadError) {
+        console.error("Image upload error:", uploadError);
+        return res.status(statusCodes.badRequest)
+          .send({ result: false, message: "One or more images failed to upload" });
+      }
+    }
+
+    // Combine existing and new images
+    const allImages = [...(existingImages || []), ...newImageUrls];
+
+    if (allImages.length === 0) {
+      return res.status(statusCodes.badRequest)
+        .send({ result: false, message: "At least one image is required" });
+    }
+
+    if (allImages.length > 10) {
+      return res.status(statusCodes.badRequest)
+        .send({ result: false, message: "Maximum 10 images allowed" });
+    }
+
+    // Check if we need to move the article to a different segment/variant
+    const needsSegmentChange = segment !== targetSegment.segment;
+    const needsVariantChange = variantName !== targetVariant.name;
+
+    if (needsSegmentChange || needsVariantChange) {
+      // Create updated article
+      const updatedArticle = {
+        ...targetVariant.articles[articleIndex].toObject(),
+        name,
+        gender,
+        images: allImages
+      };
+
+      // Remove from old location
+      targetVariant.articles.splice(articleIndex, 1);
+      
+      // If variant is now empty, remove it
+      if (targetVariant.articles.length === 0) {
+        targetSegment.variants = targetSegment.variants.filter(
+          v => v._id.toString() !== targetVariant._id.toString()
+        );
+      }
+      
+      // If segment is now empty, delete it
+      if (targetSegment.variants.length === 0) {
+        await productModel.deleteOne({ _id: targetSegment._id });
+      } else {
+        await targetSegment.save();
+      }
+
+      // Find or create new segment
+      let newSegment = await productModel.findOne({ segment });
+      
+      if (!newSegment) {
+        // Create new segment with new variant
+        await productModel.create({
+          segment,
+          variants: [{
+            name: variantName,
+            articles: [updatedArticle]
+          }]
+        });
+      } else {
+        // Find or create variant in existing segment
+        let variantIndex = newSegment.variants.findIndex(v => v.name === variantName);
+        
+        if (variantIndex === -1) {
+          // Create new variant
+          newSegment.variants.push({
+            name: variantName,
+            articles: [updatedArticle]
+          });
+        } else {
+          // Add to existing variant
+          newSegment.variants[variantIndex].articles.push(updatedArticle);
+        }
+        
+        await newSegment.save();
+      }
+
+      return res.status(statusCodes.success)
+        .send({ 
+          result: true, 
+          message: "Product updated and moved to new segment/variant successfully" 
+        });
+    } else {
+      // Update in place (same segment and variant)
+      targetVariant.articles[articleIndex].name = name;
+      targetVariant.articles[articleIndex].gender = gender;
+      targetVariant.articles[articleIndex].images = allImages;
+      
+      await targetSegment.save();
+
+      return res.status(statusCodes.success)
+        .send({ 
+          result: true, 
+          message: "Product updated successfully" 
+        });
+    }
+
+  } catch (error) {
+    console.error("Error updating product:", error);
+    return res.status(statusCodes.serverError)
+      .send({ 
+        result: false, 
+        message: "Error updating product. Please try again later",
+        error: error.message 
       });
   }
 };
@@ -631,5 +808,5 @@ const getArticlesForDropdown = async (req, res) => {
 };
 
 
-export {addProduct,importProductsFromExcel ,deleteProduct, getAllProdcuts, addBestDeals, getDeals, deleteDeals, updateDeal, getPurchases, markPurchaseConfirm, addCategories, getCategories, getArticlesForDropdown}
+export {addProduct,importProductsFromExcel ,deleteProduct, updateProduct ,getAllProdcuts, addBestDeals, getDeals, deleteDeals, updateDeal, getPurchases, markPurchaseConfirm, addCategories, getCategories, getArticlesForDropdown}
 
