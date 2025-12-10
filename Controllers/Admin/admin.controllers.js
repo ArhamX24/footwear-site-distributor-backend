@@ -537,42 +537,65 @@ try {
 const generateQRCodes = async (req, res) => {
   try {
     const { articleId, articleName, colors, sizes, numberOfQRs } = req.body;
-    const userId = req.user?.id;
-
+    const userId = req.user?._id;
     // Basic validation
-    if (!articleName || !colors || !sizes || !numberOfQRs) {
-      return res.status(400).json({ 
-        result: false, 
-        message: "All fields required: articleName, colors, sizes, numberOfQRs" 
+    if (!articleId || !articleName || !colors || !sizes || !numberOfQRs) {
+      return res.status(400).json({
+        result: false,
+        message: 'All fields required'
       });
     }
 
+    // Get article data
+    const objectId = new mongoose.Types.ObjectId(articleId);
+    const articleData = await Product.aggregate([
+      { $unwind: "$variants" },
+      { $unwind: "$variants.articles" },
+      { $match: { "variants.articles._id": objectId } },
+      { $project: { 
+        articleId: "$variants.articles._id", 
+        articleName: "$variants.articles.name", 
+        productId: "$_id",
+        variantId: "$variants._id",
+        variantName: "$variants.name"
+      }},
+      { $limit: 1 }
+    ]);
+
+
+    if (!articleData.length) {
+      return res.status(404).json({ result: false, message: 'Article not found' });
+    }
+
+    const article = articleData[0];
     const colorsArray = Array.isArray(colors) ? colors : [colors];
     const sizesArray = Array.isArray(sizes) ? sizes.map(s => parseInt(s)) : [parseInt(sizes)];
-    const batchId = `BATCH${Date.now()}`;
+    const batchId = `BATCH_${Date.now()}`;
     const qrCodes = [];
 
     // Generate QR codes with labels
     for (let i = 1; i <= numberOfQRs; i++) {
       const uniqueId = uuidv4();
 
-      // ✅ QR data structure with articleName at root level
+      // ✅ QR data structure
       const qrData = {
         uniqueId,
-        articleName, // ✅ Important: article name at root
+        articleName,
         contractorInput: {
-          articleName, // Also in contractorInput
-          articleId: articleId || null,
+          articleName,
+          articleId: article.articleId,
           colors: colorsArray,
           sizes: sizesArray,
           cartonNumber: i,
           totalCartons: numberOfQRs
         },
         batchId,
-        status: "generated"
+        status: 'generated'
       };
 
       const qrString = JSON.stringify(qrData);
+
+      // ✅ Generate QR with labels on top
       const qrCodeImage = await generateQRWithLabel(qrString, {
         articleName,
         colors: colorsArray.join(', '),
@@ -580,51 +603,60 @@ const generateQRCodes = async (req, res) => {
         cartonNo: i
       });
 
-      // ✅ Save to DB with articleName
+      // Save to DB
       const qrDoc = new QRCode({
         uniqueId,
-        articleName, // ✅ Save article name directly
+        articleName,
         qrData: qrString,
         qrImagePath: qrCodeImage,
-        status: "manufactured",
-        productReference: articleId ? {
-          productId: null, // Will be filled when matched
-          variantId: null,
-          articleId: articleId,
-          variantName: null,
-          articleName, // ✅ Save here too
-          isMatched: false
-        } : null,
-        batchInfo: {
-          contractorId: userId,
-          batchId
+        status: 'manufactured', // ✅ Initial status
+        
+        productReference: {
+          productId: article.productId,
+          variantId: article.variantId,
+          articleId: article.articleId,
+          variantName: article.variantName,
+          articleName: article.articleName,
+          isMatched: true,
+          matchedBy: req.user?._id,
+          matchedAt: new Date()
         },
+        
+        batchInfo: { 
+          contractorId: userId, 
+          batchId 
+        },
+        
         contractorInput: {
-          articleName, // ✅ And here
+          articleName,
           colors: colorsArray,
           sizes: sizesArray,
           cartonNumber: i,
           totalCartons: numberOfQRs
         },
+
         manufacturingDetails: {
           manufacturedAt: new Date(),
-          manufacturedBy: userId,
-          userType: "contractor",
-          name: req.user?.name || "Contractor"
+          manufacturedBy: { 
+            userId, 
+            userType: 'contractor', 
+            name: req.user?.name || 'Contractor'
+          }
         }
       });
 
       await qrDoc.save();
-      
+
       qrCodes.push({
         uniqueId,
         qrCodeImage,
         cartonNumber: i,
         batchId,
+        // ✅ Label info for frontend display
         labelInfo: {
           articleName,
           colors: colorsArray.join(', '),
-          sizes: sizesArray.length > 1 ? `${Math.min(...sizesArray)}X${Math.max(...sizesArray)}` : sizesArray[0],
+          sizes: sizesArray.length === 1 ? sizesArray[0] : `${Math.min(...sizesArray)}X${Math.max(...sizesArray)}`,
           cartonNo: i
         }
       });
@@ -633,22 +665,26 @@ const generateQRCodes = async (req, res) => {
     res.json({
       result: true,
       message: `Generated ${numberOfQRs} QR codes with labels`,
-      data: {
-        batchId,
+      data: { 
+        batchId, 
         qrCodes,
         articleInfo: {
-          articleName,
+          articleId: article.articleId,
+          articleName: article.articleName,
+          productId: article.productId,
+          variantId: article.variantId,
+          variantName: article.variantName,
           colors: colorsArray,
           sizes: sizesArray,
           numberOfQRs
         }
       }
     });
+
   } catch (error) {
-    console.error("QR Generation Error:", error);
     res.status(500).json({
       result: false,
-      message: "QR generation failed",
+      message: 'QR generation failed',
       error: error.message
     });
   }
