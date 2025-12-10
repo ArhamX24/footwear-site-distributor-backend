@@ -23,12 +23,12 @@ const inventoryItemSchema = new Schema({
   notes: String
 }, { timestamps: true });
 
-// ✅ NEW: Article-based inventory schema
+// ✅ FIXED: Track by articleId instead of articleName
 const inventorySchema = new Schema({
-  articleId: { type: Schema.Types.ObjectId, ref: "Product" }, // Reference to article in variants.articles
-  articleName: { type: String, required: true, index: true }, // ✅ KEY: Article name as primary identifier
-  productId: { type: Schema.Types.ObjectId, ref: "Product" }, // Reference to parent product
-  variantId: { type: Schema.Types.ObjectId }, // Reference to variant
+  articleId: { type: String, required: true, unique: true, index: true }, // ✅ PRIMARY KEY: contractorInput.articleId
+  articleName: { type: String, required: true }, // Keep for display
+  productId: { type: Schema.Types.ObjectId, ref: "Product" },
+  variantId: { type: Schema.Types.ObjectId },
   segment: { type: String },
   variantName: { type: String },
   
@@ -41,22 +41,16 @@ const inventorySchema = new Schema({
   lastUpdated: { type: Date, default: Date.now }
 }, { timestamps: true });
 
-// ✅ FIXED: Pre-save hook - Count unique QR scans, not cartons
+// Pre-save hook - Count unique QR scans
 inventorySchema.pre("save", function(next) {
-  // Count unique QR codes that are received (1 QR = 1 scan)
   this.quantityByStage.received = this.items.filter(i => i.status === "received").length;
-  
-  // Count unique QR codes that are shipped (1 QR = 1 scan)
   this.quantityByStage.shipped = this.items.filter(i => i.status === "shipped").length;
-  
-  // Available = received - shipped (in terms of QR scans)
   this.availableQuantity = this.quantityByStage.received - this.quantityByStage.shipped;
-  
   this.lastUpdated = new Date();
   next();
 });
 
-// ✅ FIXED: Updated syncWithQRCode method
+// Updated syncWithQRCode method
 inventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
   const QRCode = mongoose.model("QRCode");
   const qrCode = await QRCode.findById(qrCodeId);
@@ -95,7 +89,6 @@ inventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
     Object.assign(this.items[idx], baseItem);
   }
 
-  // Recalculate - count unique QR scans
   this.quantityByStage.received = this.items.filter(i => i.status === "received").length;
   this.quantityByStage.shipped = this.items.filter(i => i.status === "shipped").length;
   this.availableQuantity = this.quantityByStage.received - this.quantityByStage.shipped;
@@ -104,13 +97,13 @@ inventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
   return this.save();
 };
 
-inventorySchema.index({ articleName: 1 }, { unique: true });
+// ✅ Indexes - articleId is unique
+inventorySchema.index({ articleId: 1 }, { unique: true });
+inventorySchema.index({ articleName: 1 });
 inventorySchema.index({ productId: 1 });
-inventorySchema.index({ articleId: 1 });
 inventorySchema.index({ "items.qrCodeId": 1 });
 inventorySchema.index({ "items.uniqueId": 1 });
 inventorySchema.index({ "items.status": 1 });
-
 
 const Inventory = model("Inventory", inventorySchema);
 

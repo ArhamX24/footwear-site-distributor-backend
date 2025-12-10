@@ -534,69 +534,45 @@ try {
   }
 }
 
-// Unified scan controller: uses only 'manufactured' | 'received' | 'shipped'
 const generateQRCodes = async (req, res) => {
   try {
     const { articleId, articleName, colors, sizes, numberOfQRs } = req.body;
-    const userId = req.user?._id;
+    const userId = req.user?.id;
+
     // Basic validation
-    if (!articleId || !articleName || !colors || !sizes || !numberOfQRs) {
-      return res.status(400).json({
-        result: false,
-        message: 'All fields required'
+    if (!articleName || !colors || !sizes || !numberOfQRs) {
+      return res.status(400).json({ 
+        result: false, 
+        message: "All fields required: articleName, colors, sizes, numberOfQRs" 
       });
     }
 
-    // Get article data
-    const objectId = new mongoose.Types.ObjectId(articleId);
-    const articleData = await Product.aggregate([
-      { $unwind: "$variants" },
-      { $unwind: "$variants.articles" },
-      { $match: { "variants.articles._id": objectId } },
-      { $project: { 
-        articleId: "$variants.articles._id", 
-        articleName: "$variants.articles.name", 
-        productId: "$_id",
-        variantId: "$variants._id",
-        variantName: "$variants.name"
-      }},
-      { $limit: 1 }
-    ]);
-
-
-    if (!articleData.length) {
-      return res.status(404).json({ result: false, message: 'Article not found' });
-    }
-
-    const article = articleData[0];
     const colorsArray = Array.isArray(colors) ? colors : [colors];
     const sizesArray = Array.isArray(sizes) ? sizes.map(s => parseInt(s)) : [parseInt(sizes)];
-    const batchId = `BATCH_${Date.now()}`;
+    const batchId = `BATCH${Date.now()}`;
     const qrCodes = [];
 
     // Generate QR codes with labels
     for (let i = 1; i <= numberOfQRs; i++) {
       const uniqueId = uuidv4();
 
-      // ✅ QR data structure
+      // ✅ QR data structure with articleName at root level
       const qrData = {
         uniqueId,
-        articleName,
+        articleName, // ✅ Important: article name at root
         contractorInput: {
-          articleName,
-          articleId: article.articleId,
+          articleName, // Also in contractorInput
+          articleId: articleId || null,
           colors: colorsArray,
           sizes: sizesArray,
           cartonNumber: i,
           totalCartons: numberOfQRs
         },
         batchId,
-        status: 'generated'
+        status: "generated"
       };
 
       const qrString = JSON.stringify(qrData);
-
-      // ✅ Generate QR with labels on top
       const qrCodeImage = await generateQRWithLabel(qrString, {
         articleName,
         colors: colorsArray.join(', '),
@@ -604,60 +580,51 @@ const generateQRCodes = async (req, res) => {
         cartonNo: i
       });
 
-      // Save to DB
+      // ✅ Save to DB with articleName
       const qrDoc = new QRCode({
         uniqueId,
-        articleName,
+        articleName, // ✅ Save article name directly
         qrData: qrString,
         qrImagePath: qrCodeImage,
-        status: 'manufactured', // ✅ Initial status
-        
-        productReference: {
-          productId: article.productId,
-          variantId: article.variantId,
-          articleId: article.articleId,
-          variantName: article.variantName,
-          articleName: article.articleName,
-          isMatched: true,
-          matchedBy: req.user?._id,
-          matchedAt: new Date()
+        status: "manufactured",
+        productReference: articleId ? {
+          productId: null, // Will be filled when matched
+          variantId: null,
+          articleId: articleId,
+          variantName: null,
+          articleName, // ✅ Save here too
+          isMatched: false
+        } : null,
+        batchInfo: {
+          contractorId: userId,
+          batchId
         },
-        
-        batchInfo: { 
-          contractorId: userId, 
-          batchId 
-        },
-        
         contractorInput: {
-          articleName,
+          articleName, // ✅ And here
           colors: colorsArray,
           sizes: sizesArray,
           cartonNumber: i,
           totalCartons: numberOfQRs
         },
-
         manufacturingDetails: {
           manufacturedAt: new Date(),
-          manufacturedBy: { 
-            userId, 
-            userType: 'contractor', 
-            name: req.user?.name || 'Contractor'
-          }
+          manufacturedBy: userId,
+          userType: "contractor",
+          name: req.user?.name || "Contractor"
         }
       });
 
       await qrDoc.save();
-
+      
       qrCodes.push({
         uniqueId,
         qrCodeImage,
         cartonNumber: i,
         batchId,
-        // ✅ Label info for frontend display
         labelInfo: {
           articleName,
           colors: colorsArray.join(', '),
-          sizes: sizesArray.length === 1 ? sizesArray[0] : `${Math.min(...sizesArray)}X${Math.max(...sizesArray)}`,
+          sizes: sizesArray.length > 1 ? `${Math.min(...sizesArray)}X${Math.max(...sizesArray)}` : sizesArray[0],
           cartonNo: i
         }
       });
@@ -666,26 +633,22 @@ const generateQRCodes = async (req, res) => {
     res.json({
       result: true,
       message: `Generated ${numberOfQRs} QR codes with labels`,
-      data: { 
-        batchId, 
+      data: {
+        batchId,
         qrCodes,
         articleInfo: {
-          articleId: article.articleId,
-          articleName: article.articleName,
-          productId: article.productId,
-          variantId: article.variantId,
-          variantName: article.variantName,
+          articleName,
           colors: colorsArray,
           sizes: sizesArray,
           numberOfQRs
         }
       }
     });
-
   } catch (error) {
+    console.error("QR Generation Error:", error);
     res.status(500).json({
       result: false,
-      message: 'QR generation failed',
+      message: "QR generation failed",
       error: error.message
     });
   }
@@ -696,32 +659,62 @@ const scanQRCode = async (req, res) => {
     const { uniqueId } = req.params;
     const { scannedBy, location, event, notes, qualityCheck, distributorDetails, trackingNumber } = req.body;
 
+    console.log(`[SCAN] ========== Starting Scan Process ==========`);
+    console.log(`[SCAN] UniqueId: ${uniqueId}`);
+
     if (!req.user || !req.user.id) {
       return res.status(401).json({ result: false, message: "User authentication required for scanning" });
     }
 
-    // Find QRCode
+    // ✅ Find QRCode
     const qrCode = await QRCode.findOne({ uniqueId });
     if (!qrCode) {
+      console.error(`[ERROR] QR code not found: ${uniqueId}`);
       return res.status(404).json({ 
         result: false, 
         message: `QR code with uniqueId ${uniqueId} not found in database` 
       });
     }
 
-    // Ensure article name exists
+    console.log(`[SCAN] QR Code Data:`, {
+      uniqueId: qrCode.uniqueId,
+      status: qrCode.status,
+      articleName: qrCode.articleName,
+      contractorInput: {
+        articleName: qrCode.contractorInput?.articleName,
+        articleId: qrCode.contractorInput?.articleId,
+        colors: qrCode.contractorInput?.colors,
+        sizes: qrCode.contractorInput?.sizes,
+        cartonNumber: qrCode.contractorInput?.cartonNumber
+      }
+    });
+
+    // ✅ Extract articleId and articleName from contractorInput
+    const articleId = qrCode.contractorInput?.articleId;
     const articleName = qrCode.contractorInput?.articleName || qrCode.articleName;
     
-    if (!articleName) {
+    if (!articleId) {
+      console.error(`[ERROR] No articleId found in QR code: ${uniqueId}`);
       return res.status(400).json({ 
         result: false, 
-        message: "QR code does not have an article name" 
+        message: "QR code does not have an articleId. This QR might be from an old batch. Please regenerate QR codes with article information." 
       });
     }
 
+    if (!articleName) {
+      console.error(`[ERROR] No article name found in QR code: ${uniqueId}`);
+      return res.status(400).json({ 
+        result: false, 
+        message: "QR code does not have an article name." 
+      });
+    }
+
+    console.log(`[SCAN] ✅ Extracted - ArticleId: ${articleId}, ArticleName: ${articleName}`);
+
     // Update QR code's articleName if it's missing
-    if (!qrCode.articleName && articleName) {
+    if (!qrCode.articleName) {
       qrCode.articleName = articleName;
+      console.log(`[SCAN] Updated QR code articleName to: ${articleName}`);
     }
 
     const allowedEvents = new Set(["received", "shipped"]);
@@ -736,24 +729,26 @@ const scanQRCode = async (req, res) => {
 
     // ✅ EVENT: RECEIVED - Warehouse receipt scan
     if (event === "received") {
+      console.log(`[RECEIVED] Processing receive scan for ArticleId: ${articleId}`);
+
       // Check if this specific QR was already received
       if (qrCode.status === "received") {
+        console.log(`[ERROR] QR already received: ${uniqueId}`);
         return res.status(400).json({ 
           result: false, 
           message: "This carton has already been received at warehouse" 
         });
       }
 
-      // ✅ Find or create article-based inventory
-      let inventory = await Inventory.findOne({ articleName });
+      // ✅ Find or create article-based inventory using articleId
+      let inventory = await Inventory.findOne({ articleId });
 
       if (!inventory) {
-        // ✅ Create new inventory document for this article
-        console.log(`Creating new inventory for article: ${articleName}`);
+        console.log(`[INVENTORY] Creating NEW inventory for ArticleId: ${articleId}, Name: ${articleName}`);
         
         inventory = new Inventory({
+          articleId, // ✅ PRIMARY KEY
           articleName,
-          articleId: qrCode.productReference?.articleId || null,
           productId: productId || null,
           variantId: qrCode.productReference?.variantId || null,
           segment: qrCode.productReference?.segment || "Unknown",
@@ -766,21 +761,38 @@ const scanQRCode = async (req, res) => {
         // Save the new inventory first
         try {
           await inventory.save();
-          console.log(`New inventory created for article: ${articleName}`);
+          console.log(`[INVENTORY] ✅ New inventory created successfully for ArticleId: ${articleId}`);
         } catch (saveError) {
-          console.error("Error creating inventory:", saveError);
-          return res.status(500).json({
-            result: false,
-            message: `Failed to create inventory for article: ${articleName}`,
-            error: saveError.message
-          });
+          console.error(`[ERROR] Failed to create inventory:`, saveError);
+          
+          // Check if it's a duplicate key error
+          if (saveError.code === 11000) {
+            console.log(`[INVENTORY] Concurrent creation detected, fetching existing inventory`);
+            inventory = await Inventory.findOne({ articleId });
+            
+            if (!inventory) {
+              return res.status(500).json({
+                result: false,
+                message: `Failed to create or find inventory for articleId: ${articleId}`
+              });
+            }
+          } else {
+            return res.status(500).json({
+              result: false,
+              message: `Failed to create inventory for article: ${articleName}`,
+              error: saveError.message
+            });
+          }
         }
+      } else {
+        console.log(`[INVENTORY] ✅ Found existing inventory for ArticleId: ${articleId}, Name: ${articleName}`);
       }
 
       // Check if this QR already exists in this article's inventory
       const existingItem = inventory.items.find(item => item.uniqueId === uniqueId);
       if (existingItem) {
         if (existingItem.status === "received") {
+          console.log(`[ERROR] Item already in inventory: ${uniqueId}`);
           return res.status(400).json({ 
             result: false, 
             message: "This carton has already been received in inventory" 
@@ -822,9 +834,9 @@ const scanQRCode = async (req, res) => {
       // Save QR code
       try {
         await qrCode.save();
-        console.log(`QR code ${uniqueId} updated to 'received' status`);
+        console.log(`[QRCODE] ✅ QR code ${uniqueId} saved with 'received' status`);
       } catch (qrSaveError) {
-        console.error("Error saving QR code:", qrSaveError);
+        console.error(`[ERROR] Failed to save QR code:`, qrSaveError);
         return res.status(500).json({
           result: false,
           message: "Failed to update QR code status",
@@ -835,15 +847,19 @@ const scanQRCode = async (req, res) => {
       // ✅ Sync with article-specific inventory
       try {
         await inventory.syncWithQRCode(qrCode._id);
-        console.log(`Inventory synced for article: ${articleName}, Received: ${inventory.quantityByStage.received}`);
+        console.log(`[INVENTORY] ✅ Synced successfully`);
+        console.log(`[INVENTORY] ArticleId: ${articleId}, Name: ${articleName}`);
+        console.log(`[INVENTORY] Received: ${inventory.quantityByStage.received}, Shipped: ${inventory.quantityByStage.shipped}, Available: ${inventory.availableQuantity}`);
       } catch (syncError) {
-        console.error("Error syncing inventory:", syncError);
+        console.error(`[ERROR] Failed to sync inventory:`, syncError);
         return res.status(500).json({
           result: false,
           message: "Failed to sync inventory",
           error: syncError.message
         });
       }
+
+      console.log(`[SUCCESS] ========== Scan Completed Successfully ==========`);
 
       return res.status(200).json({
         result: true,
@@ -852,11 +868,13 @@ const scanQRCode = async (req, res) => {
           qrCode: {
             uniqueId: qrCode.uniqueId,
             articleName: qrCode.articleName,
+            articleId: articleId,
             status: qrCode.status,
             currentStage: "inwarehouse",
             nextStage: "shipment"
           },
           inventory: {
+            articleId: inventory.articleId,
             articleName: inventory.articleName,
             received: inventory.quantityByStage.received,
             shipped: inventory.quantityByStage.shipped,
@@ -869,6 +887,8 @@ const scanQRCode = async (req, res) => {
 
     // ✅ EVENT: SHIPPED - Shipment scan
     if (event === "shipped") {
+      console.log(`[SHIPPED] Processing ship scan for ArticleId: ${articleId}`);
+
       if (!productId) {
         return res.status(400).json({ 
           result: false, 
@@ -876,19 +896,21 @@ const scanQRCode = async (req, res) => {
         });
       }
 
-      // ✅ Find article-specific inventory
-      const inventory = await Inventory.findOne({ articleName });
+      // ✅ Find article-specific inventory by articleId
+      const inventory = await Inventory.findOne({ articleId });
 
       if (!inventory) {
+        console.error(`[ERROR] No inventory found for ArticleId: ${articleId}`);
         return res.status(400).json({ 
           result: false, 
-          message: `Cannot ship - no inventory found for article: ${articleName}. Please receive this article first.` 
+          message: `Cannot ship - no inventory found for article: ${articleName} (ID: ${articleId}). Please receive this article first.` 
         });
       }
 
       const inventoryItem = inventory.items.find(item => item.uniqueId === uniqueId);
 
       if (!inventoryItem) {
+        console.error(`[ERROR] Item not in inventory: ${uniqueId}`);
         return res.status(400).json({
           result: false,
           message: "Cannot ship a carton that hasn't been received at warehouse yet. Item not found in inventory."
@@ -946,10 +968,12 @@ const scanQRCode = async (req, res) => {
 
       try {
         await qrCode.save();
-        console.log(`QR code ${uniqueId} updated to 'shipped' status`);
+        console.log(`[QRCODE] ✅ QR code ${uniqueId} saved with 'shipped' status`);
         
         await inventory.syncWithQRCode(qrCode._id);
-        console.log(`Inventory synced for article: ${articleName}, Shipped: ${inventory.quantityByStage.shipped}`);
+        console.log(`[INVENTORY] ✅ Synced successfully. ArticleId: ${articleId}, Shipped: ${inventory.quantityByStage.shipped}, Available: ${inventory.availableQuantity}`);
+
+        console.log(`[SUCCESS] ========== Shipment Completed Successfully ==========`);
 
         return res.status(200).json({
           result: true,
@@ -958,11 +982,13 @@ const scanQRCode = async (req, res) => {
             qrCode: {
               uniqueId: qrCode.uniqueId,
               articleName: qrCode.articleName,
+              articleId: articleId,
               status: qrCode.status,
               currentStage: "shipped",
               nextStage: "delivered"
             },
             inventory: {
+              articleId: inventory.articleId,
               articleName: inventory.articleName,
               received: inventory.quantityByStage.received,
               shipped: inventory.quantityByStage.shipped,
@@ -972,7 +998,7 @@ const scanQRCode = async (req, res) => {
           }
         });
       } catch (shipmentError) {
-        console.error("Shipment processing error:", shipmentError);
+        console.error(`[ERROR] Shipment processing failed:`, shipmentError);
         return res.status(500).json({
           result: false,
           message: "Failed to process shipment",
@@ -982,7 +1008,8 @@ const scanQRCode = async (req, res) => {
     }
 
   } catch (error) {
-    console.error("QR Scan Error:", error);
+    console.error("[ERROR] ========== QR Scan Error ==========");
+    console.error(error);
     res.status(500).json({
       result: false,
       message: "Failed to process QR code scan",
@@ -990,6 +1017,7 @@ const scanQRCode = async (req, res) => {
     });
   }
 };
+
 
 
 const downloadQRCodes = async (req, res) => {
@@ -1574,7 +1602,7 @@ const getAllInventory = async (req, res) => {
     const allowedSortFields = ["lastUpdated", "availableQuantity", "createdAt", "articleName"];
     const validSortBy = allowedSortFields.includes(sortBy) ? sortBy : "lastUpdated";
 
-    // ✅ Get all article-based inventories
+    // Get all article-based inventories
     const inventories = await Inventory.find()
       .populate("productId", "segment variants")
       .populate({
@@ -1611,7 +1639,6 @@ const getAllInventory = async (req, res) => {
     const inventoryData = inventories.map(inventory => {
       if (!inventory || !inventory.items) return null;
 
-      // QR statistics - count unique QR scans
       const qrStats = inventory.items.reduce((acc, item) => {
         if (item && item.qrCodeId) {
           acc.totalQRs++;
@@ -1623,16 +1650,15 @@ const getAllInventory = async (req, res) => {
         return acc;
       }, { totalQRs: 0, totalScans: 0, scannedQRs: 0 });
 
-      // Status breakdown
       const statusBreakdown = inventory.items.reduce((acc, item) => {
         if (item && item.status) {
-          acc[item.status] = (acc[item.status] || 0) + 1; // Count QR scans
+          acc[item.status] = (acc[item.status] || 0) + 1;
         }
         return acc;
       }, {});
 
       return {
-        articleId: inventory.articleId,
+        articleId: inventory.articleId, // ✅ Return articleId
         articleName: inventory.articleName,
         productId: inventory.productId?._id || null,
         productInfo: {
@@ -1640,8 +1666,8 @@ const getAllInventory = async (req, res) => {
           variantName: inventory.variantName || "Unknown"
         },
         inventoryMetrics: {
-          totalQRsScanned: inventory.items.length, // Total unique QR scans
-          availableQuantity: inventory.availableQuantity, // Received - Shipped QR scans
+          totalQRsScanned: inventory.items.length,
+          availableQuantity: inventory.availableQuantity,
           quantityByStage: inventory.quantityByStage || { received: 0, shipped: 0 }
         },
         qrCodeStats: qrStats,
@@ -1650,7 +1676,6 @@ const getAllInventory = async (req, res) => {
       };
     }).filter(Boolean);
 
-    // Calculate overall statistics
     const overallStats = inventoryData.reduce((acc, data) => ({
       totalArticles: acc.totalArticles + 1,
       totalQRsScanned: acc.totalQRsScanned + (data.inventoryMetrics?.totalQRsScanned || 0),
