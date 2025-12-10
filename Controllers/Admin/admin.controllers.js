@@ -1520,29 +1520,26 @@ const getSingleProductInventory = async (req, res) => {
 
 const getAllInventory = async (req, res) => {
   try {
-    const { limit = 50, offset = 0, sortBy = 'lastUpdated' } = req.query;
+    const { limit = 50, offset = 0, sortBy = "lastUpdated" } = req.query;
 
-    // ✅ Whitelist allowed sort fields to prevent MongoDB errors
-    const allowedSortFields = ['lastUpdated', 'totalQuantity', 'availableQuantity', 'createdAt'];
-    const validSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'lastUpdated';
+    const allowedSortFields = ["lastUpdated", "totalQuantity", "availableQuantity", "createdAt"];
+    const validSortBy = allowedSortFields.includes(sortBy) ? sortBy : "lastUpdated";
 
-    // Get all inventory records with product and QR data
-    const inventories = await Inventory.find({})
-      .populate('productId', 'segment variants')
+    const inventories = await Inventory.find()
+      .populate("productId", "segment variants")
       .populate({
-        path: 'items.qrCodeId',
-        select: 'status totalScans batchId createdAt'
+        path: "items.qrCodeId",
+        select: "status totalScans batchId createdAt"
       })
       .sort({ [validSortBy]: -1 })
       .limit(parseInt(limit))
       .skip(parseInt(offset))
       .lean();
 
-    // Handle empty inventory case
     if (!inventories || inventories.length === 0) {
       return res.status(200).json({
         result: true,
-        message: 'No inventory data found',
+        message: "No inventory data found",
         data: {
           overallStats: {
             totalProducts: 0,
@@ -1550,28 +1547,24 @@ const getAllInventory = async (req, res) => {
             totalQRs: 0,
             totalScans: 0
           },
-          inventoryData: [],
-          pagination: {
-            limit: parseInt(limit),
-            offset: parseInt(offset),
-            hasMore: false
-          }
+          inventoryData: []
+        },
+        pagination: {
+          limit: parseInt(limit),
+          offset: parseInt(offset),
+          hasMore: false
         }
       });
     }
 
-    // Transform data for frontend consumption
     const inventoryData = inventories.map(inventory => {
-      // ✅ Add null checks for safety
-      if (!inventory || !inventory.items) {
-        return null;
-      }
+      if (!inventory || !inventory.items) return null;
 
-      // Calculate QR statistics
+      // QR statistics
       const qrStats = inventory.items.reduce((acc, item) => {
         if (item && item.qrCodeId) {
           acc.totalQRs++;
-          acc.totalScans += item.qrCodeId.totalScans || 0;
+          acc.totalScans += (item.qrCodeId.totalScans || 0);
           if (item.qrCodeId.totalScans > 0) {
             acc.scannedQRs++;
           }
@@ -1579,52 +1572,64 @@ const getAllInventory = async (req, res) => {
         return acc;
       }, { totalQRs: 0, totalScans: 0, scannedQRs: 0 });
 
-      // Status breakdown
+      // Status breakdown - count cartons
       const statusBreakdown = inventory.items.reduce((acc, item) => {
         if (item && item.status) {
-          acc[item.status] = (acc[item.status] || 0) + 1;
+          const cartons = item.articleDetails?.numberOfCartons || 1;
+          acc[item.status] = (acc[item.status] || 0) + cartons;
         }
         return acc;
       }, {});
 
-      // Article breakdown
+      // ✅ FIXED: Article breakdown - sum numberOfCartons
       const articleBreakdown = inventory.items.reduce((acc, item) => {
         if (!item || !item.articleName) return acc;
         
         const key = item.articleName;
+        const cartons = item.articleDetails?.numberOfCartons || 1;
+        
         if (!acc[key]) {
-          acc[key] = { 
-            count: 0, 
-            qrsGenerated: 0, 
+          acc[key] = {
+            count: 0,
+            qrsGenerated: 0,
             qrsScanned: 0,
             lastActivity: null
           };
         }
-        acc[key].count++;
+        
+        acc[key].count += cartons; // ✅ Sum cartons instead of counting QRs
+        
         if (item.qrCodeId) {
           acc[key].qrsGenerated++;
           if (item.qrCodeId.totalScans > 0) {
             acc[key].qrsScanned++;
           }
-          // Track last activity
-          if (item.qrCodeId.createdAt && (!acc[key].lastActivity || 
-              new Date(item.qrCodeId.createdAt) > new Date(acc[key].lastActivity))) {
+        }
+        
+        // Track last activity
+        if (item.qrCodeId?.createdAt) {
+          if (!acc[key].lastActivity || 
+              new Date(item.qrCodeId.createdAt) > new Date(acc[key].lastActivity)) {
             acc[key].lastActivity = item.qrCodeId.createdAt;
           }
         }
+        
         return acc;
       }, {});
 
       return {
         productId: inventory?.productId?._id || null,
         productInfo: {
-          segment: inventory?.productId?.segment || 'Unknown',
+          segment: inventory?.productId?.segment || "Unknown",
           totalVariants: inventory?.productId?.variants?.length || 0,
-          totalArticles: inventory?.productId?.variants?.reduce((sum, variant) => 
-            sum + (variant.articles?.length || 0), 0) || 0
+          totalArticles: inventory?.productId?.variants?.reduce(
+            (sum, variant) => sum + (variant.articles?.length || 0), 0
+          ) || 0
         },
         inventoryMetrics: {
-          totalQuantity: inventory?.totalQuantity || 0,
+          totalQuantity: inventory.items.reduce(
+            (sum, item) => sum + (item.articleDetails?.numberOfCartons || 1), 0
+          ),
           availableQuantity: inventory?.availableQuantity || 0,
           quantityByStage: inventory?.quantityByStage || {}
         },
@@ -1633,7 +1638,7 @@ const getAllInventory = async (req, res) => {
         articleBreakdown,
         lastUpdated: inventory?.lastUpdated || null
       };
-    }).filter(Boolean); 
+    }).filter(Boolean);
 
     // Calculate overall statistics
     const overallStats = inventoryData.reduce((acc, data) => ({
@@ -1641,31 +1646,36 @@ const getAllInventory = async (req, res) => {
       totalItems: acc.totalItems + (data.inventoryMetrics?.totalQuantity || 0),
       totalQRs: acc.totalQRs + (data.qrCodeStats?.totalQRs || 0),
       totalScans: acc.totalScans + (data.qrCodeStats?.totalScans || 0)
-    }), { totalProducts: 0, totalItems: 0, totalQRs: 0, totalScans: 0 });
+    }), {
+      totalProducts: 0,
+      totalItems: 0,
+      totalQRs: 0,
+      totalScans: 0
+    });
 
     return res.status(200).json({
       result: true,
-      message: 'All inventory data retrieved successfully',
+      message: "All inventory data retrieved successfully",
       data: {
         overallStats,
-        inventoryData,
-        pagination: {
-          limit: parseInt(limit),
-          offset: parseInt(offset),
-          hasMore: inventories.length === parseInt(limit)
-        }
+        inventoryData
+      },
+      pagination: {
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        hasMore: inventories.length === parseInt(limit)
       }
     });
-
   } catch (error) {
-    console.error('Error in getAllInventory:', error);
+    console.error("Error in getAllInventory:", error);
     res.status(500).json({
       result: false,
-      message: 'Failed to get all inventory data',
+      message: "Failed to get all inventory data",
       error: error.message
     });
   }
 };
+
 
 const getQRStatistics = async (req, res) => {
   try {
