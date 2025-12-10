@@ -27,6 +27,7 @@ import {
     getInventoryByArticleId,
     getShipmentDetails,
     getAllShipments,
+    getUserDetails,
     
 } from "../Controllers/Admin/admin.controllers.js";
 import { adminOnly } from "../MIddlewares/roleauth.middleware.js";
@@ -35,7 +36,7 @@ import {
     importProductsFromExcel,
     deleteProduct,
     updateProduct, 
-    getAllProdcuts, 
+    getAllProducts, 
     addBestDeals, 
     deleteDeals, 
     getDeals, 
@@ -67,7 +68,7 @@ adminRouter.post("/register", register)
 .post("/products/addproduct", upload.array('images', 10), addProduct)
 .delete("/products/deleteproduct/:productid", deleteProduct)
 .put("/products/updateproduct/:productid", upload.array('images', 10), updateProduct)
-.get("/products/getproducts", getAllProdcuts)
+.get("/products/getproducts", getAllProducts)
 .post("/products/import-excel", upload.single('excel'), importProductsFromExcel)
 .get("/products/articles", getArticlesForDropdown)
 
@@ -134,5 +135,8 @@ adminRouter.post("/register", register)
 
 // Cleanup operations route
 .delete("/shipments/cleanup", adminOnly, cleanupOldShipments)
+
+
+.get("/users/details/:id", adminOnly, getUserDetails)
 
 export default adminRouter;

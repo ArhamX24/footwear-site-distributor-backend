@@ -448,20 +448,25 @@ const deleteDistributor = async (req,res) => {
 
 const getDistributors = async (req, res) => {
     try {
+        // ✅ DON'T exclude password - we need plainPassword field
         const distributors = await userModel.find({ 
             role: 'distributor',
             isActive: true 
-        }).select('-password -refreshToken').sort({ createdAt: -1 });
+        })
+        .select('-refreshToken') // Only exclude refreshToken, keep plainPassword
+        .sort({ createdAt: -1 });
 
         const formattedDistributors = distributors.map(distributor => ({
             _id: distributor._id,
             name: distributor.name,
             phoneNo: distributor.phoneNo,
+            // ✅ Include plainPassword for card list (optional)
+            password: distributor.plainPassword, // This is the plain text password
             role: distributor.role,
-            billNo: distributor.distributorDetails?.billNo,
+            salesmanName: distributor.distributorDetails?.salesmanName,
             partyName: distributor.distributorDetails?.partyName,
             transport: distributor.distributorDetails?.transport,
-            address: distributor.distributorDetails?.address,
+            city: distributor.distributorDetails?.city,
             totalPurchases: distributor.distributorDetails?.purchases?.length || 0,
             totalShipments: distributor.distributorDetails?.receivedShipments?.length || 0,
             isActive: distributor.isActive,
@@ -476,12 +481,15 @@ const getDistributors = async (req, res) => {
         });
 
     } catch (error) {
+        console.error('Error getting distributors:', error);
         res.status(statusCodes.serverError).json({
             result: false,
-            message: "Failed to retrieve distributors"
+            message: "Failed to retrieve distributors",
+            error: error.message
         });
     }
 };
+
 
 const updateDistributor = async (req,res) => {
     try {
@@ -1850,7 +1858,6 @@ const getQRStatistics = async (req, res) => {
 };
 
 
-// ✅ FIXED: addContractor - Let schema handle password hashing
 const addContractor = async (req, res) => {
   try {
     const { fullName, phoneNo, password } = req.body;
@@ -1872,27 +1879,28 @@ const addContractor = async (req, res) => {
       });
     }
 
-    // ✅ REMOVED manual hashing - let schema handle it
+    // Create contractor - main password will be hashed by schema
+    // But contractorDetails.password stays plain text
     const newContractor = new userModel({
       name: fullName,
       phoneNo: cleanPhoneNo,
-      password: password,  // ✅ Plain text - schema will hash it
+      password: password, // This will be hashed by pre-save hook
       role: 'contractor',
       isActive: true,
       contractorDetails: {
         fullName,
         phoneNo: cleanPhoneNo,
-        password: password,  // ✅ Plain text here too
+        password: password, // ✅ PLAIN TEXT - NOT HASHED
         totalItemsProduced: 0,
         activeProductions: []
       },
-      createdBy: req.user?._id
+      createdBy: req.user?.id
     });
 
-    await newContractor.save(); // Schema pre("save") will hash the password
+    await newContractor.save();
 
     const contractorResponse = {
-      _id: newContractor._id,
+      id: newContractor._id,
       name: newContractor.name,
       phoneNo: newContractor.phoneNo,
       role: newContractor.role,
@@ -1908,6 +1916,7 @@ const addContractor = async (req, res) => {
     });
 
   } catch (error) {
+    console.error('Error adding contractor:', error);
     res.status(statusCodes.serverError).json({
       result: false,
       message: "Failed to add contractor",
@@ -1916,7 +1925,6 @@ const addContractor = async (req, res) => {
   }
 };
 
-// ✅ FIXED: addWarehouseManager 
 const addWarehouseManager = async (req, res) => {
   try {
     const { fullName, phoneNo, password } = req.body;
@@ -1938,27 +1946,26 @@ const addWarehouseManager = async (req, res) => {
       });
     }
 
-    // ✅ REMOVED manual hashing
     const newWarehouseManager = new userModel({
       name: fullName,
       phoneNo: cleanPhoneNo,
-      password: password,  // ✅ Plain text
+      password: password, // This will be hashed
       role: 'warehouse_inspector',
       isActive: true,
       warehouseInspectorDetails: {
         fullName,
         phoneNo: cleanPhoneNo,
-        password: password,  // ✅ Plain text
+        password: password, // ✅ PLAIN TEXT - NOT HASHED
         totalItemsInspected: 0,
         itemsProcessedToday: 0
       },
-      createdBy: req.user?._id
+      createdBy: req.user?.id
     });
 
     await newWarehouseManager.save();
 
     const warehouseManagerResponse = {
-      _id: newWarehouseManager._id,
+      id: newWarehouseManager._id,
       name: newWarehouseManager.name,
       phoneNo: newWarehouseManager.phoneNo,
       role: newWarehouseManager.role,
@@ -1974,6 +1981,7 @@ const addWarehouseManager = async (req, res) => {
     });
 
   } catch (error) {
+    console.error('Error adding warehouse manager:', error);
     res.status(statusCodes.serverError).json({
       result: false,
       message: "Failed to add warehouse manager",
@@ -1982,7 +1990,7 @@ const addWarehouseManager = async (req, res) => {
   }
 };
 
-// ✅ FIXED: addShipmentManager
+
 const addShipmentManager = async (req, res) => {
   try {
     const { fullName, phoneNo, password } = req.body;
@@ -2004,27 +2012,26 @@ const addShipmentManager = async (req, res) => {
       });
     }
 
-    // ✅ REMOVED manual hashing
     const newShipmentManager = new userModel({
       name: fullName,
       phoneNo: cleanPhoneNo,
-      password: password,  // ✅ Plain text
+      password: password, // This will be hashed
       role: 'shipment_manager',
       isActive: true,
       shipmentManagerDetails: {
         fullName,
         phoneNo: cleanPhoneNo,
-        password: password,  // ✅ Plain text
+        password: password, // ✅ PLAIN TEXT - NOT HASHED
         totalShipmentsHandled: 0,
         activeShipments: []
       },
-      createdBy: req.user?._id
+      createdBy: req.user?.id
     });
 
     await newShipmentManager.save();
 
     const shipmentManagerResponse = {
-      _id: newShipmentManager._id,
+      id: newShipmentManager._id,
       name: newShipmentManager.name,
       phoneNo: newShipmentManager.phoneNo,
       role: newShipmentManager.role,
@@ -2040,6 +2047,7 @@ const addShipmentManager = async (req, res) => {
     });
 
   } catch (error) {
+    console.error('Error adding shipment manager:', error);
     res.status(statusCodes.serverError).json({
       result: false,
       message: "Failed to add shipment manager",
@@ -2048,70 +2056,68 @@ const addShipmentManager = async (req, res) => {
   }
 };
 
-// ✅ FIXED: addDistributor
 const addDistributor = async (req, res) => {
-    try {
-        let { billNo, partyName, transport, phoneNo, password } = req.body;
+  try {
+    let { salesmanName, partyName, city, transport, phoneNo, password } = req.body;
 
-        let numBillNo = Number(billNo);
-        partyName = partyName ? partyName.trim() : "";
-        transport = transport ? transport.trim() : "";
-        password = password ? password.trim() : "";
+    console.log(city);
+    
 
-        let checkData = distributorValidationSchema.safeParse({
-            billNo: numBillNo, 
-            partyName, 
-            transport, 
-            phoneNo, 
-            password
-        });
+    partyName = partyName ? partyName.trim() : "";
+    transport = transport ? transport.trim() : "";
+    password = password ? password.trim() : "";
 
-        if (!checkData.success) {
-            return res.status(statusCodes.badRequest).json({
-                result: false, 
-                message: checkData.error.errors[0].message, 
-                error: checkData.error
-            });
-        }
-
-        let alreadyInDb = await userModel.findOne({ phoneNo });
-
-        if (alreadyInDb) {
-            return res.status(statusCodes.conflict).json({
-                result: false, 
-                message: "Phone number already registered"
-            });
-        }
-
-        // ✅ REMOVED manual hashing
-        await userModel.create({
-            name: partyName,
-            phoneNo,
-            password: password,  // ✅ Plain text - schema will hash it
-            role: "distributor",
-            isActive: true,
-            distributorDetails: {
-                billNo: numBillNo,
-                partyName,
-                transport,
-                purchases: [],
-                receivedShipments: []
-            },
-            createdBy: req.user?._id || null
-        });
-
-        return res.status(statusCodes.success).json({
-            result: true, 
-            message: "Distributor Created Successfully"
-        });
-
-    } catch (error) {
-        return res.status(statusCodes.serverError).json({
-            result: false, 
-            message: "Error in Adding Distributor. Please Try Again Later",
-            error: error.message
-        });
+    let checkData = distributorValidationSchema.safeParse({ partyName, transport, phoneNo, password });
+    
+    if (!checkData.success) {
+      return res.status(statusCodes.badRequest).json({
+        result: false,
+        message: checkData.error.errors[0].message,
+        error: checkData.error
+      });
     }
+
+    let alreadyInDb = await userModel.findOne({ phoneNo });
+    if (alreadyInDb) {
+      return res.status(statusCodes.conflict).json({
+        result: false,
+        message: "Phone number already registered"
+      });
+    }
+
+    // Create distributor - main password hashed, but we don't store in distributorDetails
+    await userModel.create({
+      name: partyName,
+      phoneNo,
+      password: password, // This will be hashed
+      role: 'distributor',
+      isActive: true,
+      distributorDetails: {
+        salesmanName,
+        partyName,
+        cityName: city,
+        transport,
+        purchases: [],
+        receivedShipments: []
+      },
+      // Store plain password at root level for admin viewing
+      plainPassword: password, // ✅ ADD THIS FIELD
+      createdBy: req.user?.id || null
+    });
+
+    return res.status(statusCodes.success).json({
+      result: true,
+      message: "Distributor Created Successfully"
+    });
+
+  } catch (error) {
+    console.error('Error adding distributor:', error);
+    return res.status(statusCodes.serverError).json({
+      result: false,
+      message: "Error in Adding Distributor. Please Try Again Later",
+      error: error.message
+    });
+  }
 };
 
 const createOrUpdateShipment = async (qrCode, user, distributorDetails) => {
@@ -2962,6 +2968,113 @@ const generateWarehouseReceiptPDF = async (req, res) => {
   }
 };
 
+const getUserDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // ✅ Get user with plainPassword field
+    const user = await userModel.findById(id)
+      .select('+plainPassword') // Include plainPassword
+      .lean();
+
+    if (!user) {
+      return res.status(statusCodes.notFound).json({
+        result: false,
+        message: "User not found"
+      });
+    }
+
+    let userDetails = {
+      id: user._id,
+      phoneNo: user.phoneNo,
+      role: user.role,
+      isActive: user.isActive,
+      createdAt: user.createdAt,
+      lastLogin: user.lastLogin,
+      loginCredential: user.phoneNo
+    };
+
+    // Add role-specific details with PLAIN TEXT PASSWORD
+    switch (user.role) {
+      case 'contractor':
+        userDetails = {
+          ...userDetails,
+          fullName: user.contractorDetails?.fullName,
+          phoneNo: user.contractorDetails?.phoneNo || user.phoneNo,
+          loginCredential: user.contractorDetails?.phoneNo || user.phoneNo,
+          password: user.contractorDetails?.password || "Not available", // Plain text
+          totalItemsProduced: user.contractorDetails?.totalItemsProduced || 0,
+          activeProductions: user.contractorDetails?.activeProductions || []
+        };
+        break;
+
+      case 'warehouse_inspector':
+        userDetails = {
+          ...userDetails,
+          fullName: user.warehouseInspectorDetails?.fullName,
+          phoneNo: user.warehouseInspectorDetails?.phoneNo || user.phoneNo,
+          loginCredential: user.warehouseInspectorDetails?.phoneNo || user.phoneNo,
+          password: user.warehouseInspectorDetails?.password || "Not available", // Plain text
+          totalItemsInspected: user.warehouseInspectorDetails?.totalItemsInspected || 0,
+          itemsProcessedToday: user.warehouseInspectorDetails?.itemsProcessedToday || 0
+        };
+        break;
+
+      case 'shipment_manager':
+        userDetails = {
+          ...userDetails,
+          fullName: user.shipmentManagerDetails?.fullName,
+          phoneNo: user.shipmentManagerDetails?.phoneNo || user.phoneNo,
+          loginCredential: user.shipmentManagerDetails?.phoneNo || user.phoneNo,
+          password: user.shipmentManagerDetails?.password || "Not available", // Plain text
+          totalShipmentsHandled: user.shipmentManagerDetails?.totalShipmentsHandled || 0,
+          activeShipments: user.shipmentManagerDetails?.activeShipments || []
+        };
+        break;
+
+      case 'distributor':
+        userDetails = {
+          ...userDetails,
+          name: user.name,
+          partyName: user.distributorDetails?.partyName,
+          salesmanName: user.distributorDetails?.salesmanName,
+          cityName: user.distributorDetails?.cityName, // ✅ Use 'city' field
+          transport: user.distributorDetails?.transport,
+          password: user.plainPassword || "Not available", // ✅ Plain text password
+          totalPurchases: user.distributorDetails?.purchases?.length || 0,
+          totalShipments: user.distributorDetails?.receivedShipments?.length || 0
+        };
+        break;
+
+      case 'admin':
+        userDetails = {
+          ...userDetails,
+          fullName: user.adminDetails?.fullName,
+          phoneNo: user.adminDetails?.phoneNo || user.phoneNo,
+          loginCredential: user.adminDetails?.phoneNo || user.phoneNo,
+          password: user.adminDetails?.password || "Not available",
+          permissions: user.adminDetails?.permissions || [],
+          lastAdminAction: user.adminDetails?.lastAdminAction
+        };
+        break;
+    }
+
+    res.status(statusCodes.success).json({
+      result: true,
+      message: "User details retrieved successfully",
+      data: userDetails
+    });
+
+  } catch (error) {
+    console.error('Error getting user details:', error);
+    res.status(statusCodes.serverError).json({
+      result: false,
+      message: "Failed to retrieve user details",
+      error: error.message
+    });
+  }
+};
+
 
 
 
@@ -2982,4 +3095,5 @@ getContractors,
   generateShipmentReceipt,
   getInventoryByArticleId,
   generateQRWithLabel,
-  generateWarehouseReceiptPDF}
+  generateWarehouseReceiptPDF,
+  getUserDetails}

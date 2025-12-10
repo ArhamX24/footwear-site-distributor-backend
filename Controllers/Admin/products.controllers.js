@@ -72,11 +72,38 @@ const prodcutIdValidationSchema = zod.object({
 
 const addProduct = async (req, res) => {
   try {
-    let { segment, gender, articleName, colors, sizes, variant } = req.body;
+    let { 
+      segment, 
+      gender, 
+      articleName, 
+      colors, 
+      sizes, 
+      variant,
+      segmentKeywords,
+      variantKeywords,
+      articleKeywords
+    } = req.body;
 
     segment = segment?.trim().toLowerCase();
     variant = variant?.trim().toLowerCase();
     articleName = articleName?.trim().toLowerCase();
+
+    // ✅ Process keywords
+    let segmentKeywordsArr = [];
+    let variantKeywordsArr = [];
+    let articleKeywordsArr = [];
+
+    if (segmentKeywords && Array.isArray(segmentKeywords)) {
+      segmentKeywordsArr = segmentKeywords.map(k => k.trim().toLowerCase()).filter(Boolean);
+    }
+
+    if (variantKeywords && Array.isArray(variantKeywords)) {
+      variantKeywordsArr = variantKeywords.map(k => k.trim().toLowerCase()).filter(Boolean);
+    }
+
+    if (articleKeywords && Array.isArray(articleKeywords)) {
+      articleKeywordsArr = articleKeywords.map(k => k.trim().toLowerCase()).filter(Boolean);
+    }
 
     // --- image upload section
     if (!req.files || req.files.length === 0) {
@@ -103,13 +130,17 @@ const addProduct = async (req, res) => {
       name: articleName,
       images: imageUrls,
       gender,
+      keywords: articleKeywordsArr  // ✅ Add article keywords
     };
 
     if (!existingSegment) {
+      // ✅ Create new segment with keywords
       await productModel.create({
         segment,
+        keywords: segmentKeywordsArr,  // ✅ Segment keywords
         variants: [{
           name: variant,
+          keywords: variantKeywordsArr,  // ✅ Variant keywords
           articles: [newArticle]
         }]
       });
@@ -118,15 +149,25 @@ const addProduct = async (req, res) => {
         .send({ result: true, message: "Segment, variant, and article created" });
     }
 
+    // ✅ Update existing segment keywords (merge unique)
+    const updatedSegmentKeywords = [...new Set([...existingSegment.keywords, ...segmentKeywordsArr])];
+    existingSegment.keywords = updatedSegmentKeywords;
+
     // --- Segment exists. Find or create variant
     let variantIndex = existingSegment.variants.findIndex(v => v.name === variant);
 
     if (variantIndex === -1) {
+      // ✅ Create new variant with keywords
       existingSegment.variants.push({
         name: variant,
+        keywords: variantKeywordsArr,
         articles: [newArticle]
       });
     } else {
+      // ✅ Update existing variant keywords (merge unique)
+      const existingVariant = existingSegment.variants[variantIndex];
+      const updatedVariantKeywords = [...new Set([...existingVariant.keywords, ...variantKeywordsArr])];
+      existingSegment.variants[variantIndex].keywords = updatedVariantKeywords;
       existingSegment.variants[variantIndex].articles.push(newArticle);
     }
 
@@ -136,11 +177,12 @@ const addProduct = async (req, res) => {
       .send({ result: true, message: "Variant and/or article added to existing segment" });
 
   } catch (error) {
-
+    console.error(error);
     return res.status(statusCodes.serverError)
       .send({ result: false, message: "Error in Adding Product. Please Try Again Later", error });
   }
 };
+
 
 
 // Upload Data using excel 
@@ -296,18 +338,55 @@ const deleteProduct = async (req, res) => {
   }
 };
 
-// Add this to your products.controllers.js file
 
 const updateProduct = async (req, res) => {
   try {
     const { productid } = req.params;
-    let { name, segment, gender, variantName, existingImages } = req.body;
+    let { 
+      name, 
+      segment, 
+      gender, 
+      variantName, 
+      existingImages,
+      segmentKeywords,
+      variantKeywords,
+      articleKeywords
+    } = req.body;
 
     // Normalize inputs
     name = name?.trim().toLowerCase();
     segment = segment?.trim().toLowerCase();
     gender = gender?.trim().toLowerCase();
     variantName = variantName?.trim().toLowerCase();
+
+    // ✅ Process keywords
+    let segmentKeywordsArr = [];
+    let variantKeywordsArr = [];
+    let articleKeywordsArr = [];
+
+    if (segmentKeywords) {
+      if (typeof segmentKeywords === 'string') {
+        segmentKeywordsArr = segmentKeywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
+      } else if (Array.isArray(segmentKeywords)) {
+        segmentKeywordsArr = segmentKeywords.map(k => k.trim().toLowerCase()).filter(Boolean);
+      }
+    }
+
+    if (variantKeywords) {
+      if (typeof variantKeywords === 'string') {
+        variantKeywordsArr = variantKeywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
+      } else if (Array.isArray(variantKeywords)) {
+        variantKeywordsArr = variantKeywords.map(k => k.trim().toLowerCase()).filter(Boolean);
+      }
+    }
+
+    if (articleKeywords) {
+      if (typeof articleKeywords === 'string') {
+        articleKeywordsArr = articleKeywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
+      } else if (Array.isArray(articleKeywords)) {
+        articleKeywordsArr = articleKeywords.map(k => k.trim().toLowerCase()).filter(Boolean);
+      }
+    }
 
     // Parse existing images if it's a string
     if (typeof existingImages === 'string') {
@@ -391,7 +470,8 @@ const updateProduct = async (req, res) => {
         ...targetVariant.articles[articleIndex].toObject(),
         name,
         gender,
-        images: allImages
+        images: allImages,
+        keywords: articleKeywordsArr  // ✅ Update article keywords
       };
 
       // Remove from old location
@@ -415,27 +495,35 @@ const updateProduct = async (req, res) => {
       let newSegment = await productModel.findOne({ segment });
       
       if (!newSegment) {
-        // Create new segment with new variant
+        // ✅ Create new segment with keywords
         await productModel.create({
           segment,
+          keywords: segmentKeywordsArr,
           variants: [{
             name: variantName,
+            keywords: variantKeywordsArr,
             articles: [updatedArticle]
           }]
         });
       } else {
+        // ✅ Update segment keywords (merge)
+        newSegment.keywords = [...new Set([...newSegment.keywords, ...segmentKeywordsArr])];
+        
         // Find or create variant in existing segment
         let variantIndex = newSegment.variants.findIndex(v => v.name === variantName);
         
         if (variantIndex === -1) {
-          // Create new variant
+          // ✅ Create new variant with keywords
           newSegment.variants.push({
             name: variantName,
+            keywords: variantKeywordsArr,
             articles: [updatedArticle]
           });
         } else {
-          // Add to existing variant
-          newSegment.variants[variantIndex].articles.push(updatedArticle);
+          // ✅ Update variant keywords (merge)
+          const existingVariant = newSegment.variants[variantIndex];
+          existingVariant.keywords = [...new Set([...existingVariant.keywords, ...variantKeywordsArr])];
+          existingVariant.articles.push(updatedArticle);
         }
         
         await newSegment.save();
@@ -447,10 +535,17 @@ const updateProduct = async (req, res) => {
           message: "Product updated and moved to new segment/variant successfully" 
         });
     } else {
-      // Update in place (same segment and variant)
+      // ✅ Update in place (same segment and variant)
       targetVariant.articles[articleIndex].name = name;
       targetVariant.articles[articleIndex].gender = gender;
       targetVariant.articles[articleIndex].images = allImages;
+      targetVariant.articles[articleIndex].keywords = articleKeywordsArr;  // ✅ Update keywords
+      
+      // ✅ Update segment keywords (merge)
+      targetSegment.keywords = [...new Set([...targetSegment.keywords, ...segmentKeywordsArr])];
+      
+      // ✅ Update variant keywords (merge)
+      targetVariant.keywords = [...new Set([...targetVariant.keywords, ...variantKeywordsArr])];
       
       await targetSegment.save();
 
@@ -472,226 +567,402 @@ const updateProduct = async (req, res) => {
   }
 };
 
-const getAllProdcuts = async (req, res) => {
+
+const getAllProducts = async (req, res) => {
   try {
+    const { format } = req.query; // 'articles', 'segments', or 'both' (default)
+
     const products = await productModel.find({});
+    
     if (!products || products.length === 0) {
-      return res
-        .status(statusCodes.notFound)
-        .send({ result: false, message: "No products found" });
+      return res.status(statusCodes.notFound).send({ 
+        result: false, 
+        message: "No products found" 
+      });
     }
 
-    // flatten to articles with context
+    // ✅ Flatten to articles with context AND keywords
     const articles = products.flatMap((product) =>
       (product.variants || []).flatMap((variant) =>
         (variant.articles || []).map((article) => ({
-          ...article.toObject(),
+          _id: article._id,
+          name: article.name,
+          colors: article.colors,
+          sizes: article.sizes,
+          images: article.images,
+          gender: article.gender,
+          indeal: article.indeal,
+          deal: article.deal,
+          allColorsAvailable: article.allColorsAvailable,
+          createdAt: article.createdAt,
+          updatedAt: article.updatedAt,
+          // ✅ Include all keywords
+          articleKeywords: article.keywords || [],
+          // Context fields
           variantId: variant._id,
           variantName: variant.name,
+          variantKeywords: variant.keywords || [],
           productId: product._id,
-          productName: product.name || product.articleName,
           segment: product.segment,
+          segmentKeywords: product.keywords || []
         }))
       )
     );
 
-    // group by segment
-    const grouped = articles.reduce((acc, article) => {
+    // If frontend only wants articles list
+    if (format === 'articles') {
+      return res.status(statusCodes.success).send({
+        result: true,
+        message: "Articles retrieved successfully",
+        totalCount: articles.length,
+        data: articles
+      });
+    }
+
+    // Group by segment
+    const groupedBySegment = articles.reduce((acc, article) => {
       const seg = article.segment || "Unknown";
       if (!acc[seg]) acc[seg] = [];
       acc[seg].push(article);
       return acc;
     }, {});
 
+    // Get unique segments list
+    const segments = Object.keys(groupedBySegment).filter(seg => seg !== "Unknown");
+
+    // If frontend only wants segments
+    if (format === 'segments') {
+      return res.status(statusCodes.success).send({
+        result: true,
+        message: "Segments retrieved successfully",
+        data: segments
+      });
+    }
+
+    // Default: return everything (format === 'both' or no format specified)
     return res.status(statusCodes.success).send({
       result: true,
+      message: "Products retrieved successfully",
       totalCount: articles.length,
-      groupedData: grouped,
+      segments: segments,
+      groupedData: groupedBySegment,
       data: articles
     });
+
   } catch (error) {
-    return res
-      .status(statusCodes.serverError)
-      .send({ result: false, message: "Internal Server Error" });
+    console.error('Error in getAllProducts:', error);
+    return res.status(statusCodes.serverError).send({ 
+      result: false, 
+      message: "Internal Server Error",
+      error: error.message
+    });
   }
 };
 
 
-const addBestDeals = async (req,res) => {
+
+const addBestDeals = async (req, res) => {
     try {
-      let {articleId, articleName, noOfPurchase, start, end, reward} = req?.body
+        let {
+            dealType,
+            segmentName,
+            articleId,
+            articleName,
+            variantName,
+            noOfPurchase,
+            start,
+            end,
+            reward
+        } = req?.body;
 
-      let startDate = new Date(start)
-      let endDate = new Date(end)
-      articleName = articleName ? articleName.trim() : ""
-      reward = reward ? reward.trim() : ""
+        let startDate = new Date(start);
+        let endDate = new Date(end);
+        
+        articleName = articleName ? articleName.trim() : "";
+        reward = reward ? reward.trim() : "";
+        segmentName = segmentName ? segmentName.trim() : "";
 
-      let validateData = dealsValidationSchema.safeParse({
-        articleName,
-        startDate,
-        endDate,
-        reward,
-      })
-
-      if(!validateData.success){
-        return res.status(statusCodes.badRequest).send({result: false, message: "Invalid Data", error: validateData.error})
-      }
-
-      if (!req.files || req.files.length === 0) {
-      return res
-        .status(statusCodes.badRequest)
-        .send({ result: false, message: "Please Upload At Least One Image" });
-      }
-
-    const uploadPromises = req.files.map((file) => uploadOnCloudinary(file.path));
-
-    let uploadResults;
-    try {
-      uploadResults = await Promise.all(uploadPromises);
-    } catch (uploadError) {
-      return res
-        .status(statusCodes.badRequest)
-        .send({ result: false, message: "Image Failed to upload. Please try again later" });
-    }
-
-    let imageUrl = uploadResults.map((file) => file.secure_url); 
-    
-    let dealAlreadyExits = await dealsModel.find({articleId: articleId})
-
-    if(dealAlreadyExits.length > 0){
-      return res.status(statusCodes.badRequest).send({result: false, message: "Deal Already Exits Of This Article"})
-    }
-
-    await dealsModel.create({
-      articleId,
-      articleName,
-      startDate,
-      endDate,
-      image: imageUrl[0],
-      noOfPurchase: noOfPurchase,
-      reward,
-      expireAt: endDate
-    })
-
-// 4) Mark that article as "in deal" and set its minQuantity & reward
-      await productModel.findOneAndUpdate(
-        { "variants.articles._id": articleId },        // find the product containing that article
-        {
-          $set: {
-            // for the matching variant (v) and article (a) set these fields
-            "variants.$[v].articles.$[a].deal.minQuantity": noOfPurchase,
-            "variants.$[v].articles.$[a].deal.reward": reward,
-            "variants.$[v].articles.$[a].indeal": true
-          }
-        },
-        {
-          arrayFilters: [
-            { "v.articles._id": articleId },  // pick the variant whose articles[] has our ID
-            { "a._id": articleId }            // pick the article subdoc by ID
-          ],
-          new: true
+        // Validate deal type
+        if (!dealType || !['segment', 'article'].includes(dealType)) {
+            return res.status(statusCodes.badRequest).send({
+                result: false,
+                message: "Invalid deal type. Must be 'segment' or 'article'"
+            });
         }
-      );
-            
-    return res.status(statusCodes.success).send({result: true, message: "Deals Added"})
+
+        // Validate based on deal type
+        if (dealType === 'segment' && !segmentName) {
+            return res.status(statusCodes.badRequest).send({
+                result: false,
+                message: "Segment name is required for segment deals"
+            });
+        }
+
+        if (dealType === 'article' && (!articleId || !articleName)) {
+            return res.status(statusCodes.badRequest).send({
+                result: false,
+                message: "Article ID and name are required for article deals"
+            });
+        }
+
+        // Validate dates
+        if (startDate >= endDate) {
+            return res.status(statusCodes.badRequest).send({
+                result: false,
+                message: "End date must be after start date"
+            });
+        }
+
+        // Check for image upload
+        if (!req.files || req.files.length === 0) {
+            return res.status(statusCodes.badRequest).send({
+                result: false,
+                message: "Please Upload At Least One Image"
+            });
+        }
+
+        // Upload image to cloudinary
+        const uploadPromises = req.files.map((file) => uploadOnCloudinary(file.path));
+        let uploadResults;
+        
+        try {
+            uploadResults = await Promise.all(uploadPromises);
+        } catch (uploadError) {
+            return res.status(statusCodes.badRequest).send({
+                result: false,
+                message: "Image Failed to upload. Please try again later"
+            });
+        }
+
+        let imageUrl = uploadResults.map((file) => file.secure_url);
+
+        // Check if deal already exists
+        let dealQuery = {};
+        if (dealType === 'segment') {
+            dealQuery = { segmentName: segmentName, dealType: 'segment', isActive: true };
+        } else {
+            dealQuery = { articleId: articleId, dealType: 'article', isActive: true };
+        }
+
+        let dealAlreadyExists = await dealsModel.findOne(dealQuery);
+
+        if (dealAlreadyExists) {
+            return res.status(statusCodes.badRequest).send({
+                result: false,
+                message: `Active deal already exists for this ${dealType}`
+            });
+        }
+
+        // Create the deal
+        const newDeal = await dealsModel.create({
+            dealType,
+            segmentName: dealType === 'segment' ? segmentName : undefined,
+            articleId: dealType === 'article' ? articleId : undefined,
+            articleName,
+            variantName: variantName || undefined,
+            startDate,
+            endDate,
+            image: imageUrl[0],
+            noOfPurchase: parseInt(noOfPurchase),
+            reward,
+            expireAt: endDate,
+            isActive: true
+        });
+
+        // Update product/articles based on deal type
+        if (dealType === 'segment') {
+            // Update all articles in this segment
+            await productModel.updateMany(
+                { segment: segmentName },
+                {
+                    $set: {
+                        "variants.$[].articles.$[].deal.minQuantity": parseInt(noOfPurchase).toString(),
+                        "variants.$[].articles.$[].deal.reward": reward,
+                        "variants.$[].articles.$[].indeal": true
+                    }
+                }
+            );
+        } else {
+            // Update only the specific article
+            await productModel.findOneAndUpdate(
+                { "variants.articles._id": articleId },
+                {
+                    $set: {
+                        "variants.$[v].articles.$[a].deal.minQuantity": parseInt(noOfPurchase).toString(),
+                        "variants.$[v].articles.$[a].deal.reward": reward,
+                        "variants.$[v].articles.$[a].indeal": true
+                    }
+                },
+                {
+                    arrayFilters: [
+                        { "v.articles._id": articleId },
+                        { "a._id": articleId }
+                    ],
+                    new: true
+                }
+            );
+        }
+
+        return res.status(statusCodes.success).send({
+            result: true,
+            message: `${dealType === 'segment' ? 'Segment-wide' : 'Article'} deal added successfully`,
+            data: newDeal
+        });
+
     } catch (error) {
-        return res.status(statusCodes.serverError).send({result: false, message: "Error in Adding Deals. Please Try Again Later"})
+        console.error('Error adding deal:', error);
+        return res.status(statusCodes.serverError).send({
+            result: false,
+            message: "Error in Adding Deals. Please Try Again Later",
+            error: error.message
+        });
     }
-}
+};
 
 const getDeals = async (req, res) => {
-  try {
-    const allDeals = await dealsModel.find({});
-
-    // Get festive images regardless of deal presence
-    const festiveImages = await Festive.find({}, "image");
-    const imageUrls = festiveImages.map(festival => festival.image);
-
-    const dealImages = allDeals.map(deal => deal.image);
-    const allImages = [...imageUrls, ...dealImages];
-
-    return res.status(statusCodes.success).send({
-      result: true,
-      message: allDeals.length ? "Found All Deals" : "No Deals Added Yet",
-      data: allDeals, // always an array
-      images: allImages
-    });
-  } catch (error) {
-    return res.status(statusCodes.serverError).send({
-      result: false,
-      message: "Error in Getting Deals. Please Try Again Later"
-    });
-  }
-};
-const deleteDeals = async (req,res) => {
     try {
-        let {productid} = req?.params;
+        const allDeals = await dealsModel.find({ isActive: true }).sort({ createdAt: -1 });
 
-        if(!productid){
-          return res.status(statusCodes.badRequest).send({result: false, message: "Product Id Invalid"})
-        }
-        
-        let checkId = prodcutIdValidationSchema.safeParse({productsId: productid})
-
-        if(!checkId.success){
-            return res.status(statusCodes.badRequest).send({result: false, message: checkId.error.errors[0].message, error: "eror"})
-        }
-
-        let dealInTable = await dealsModel.findById(productid)
-
-        if(!dealInTable){
-            return res.status(statusCodes.badRequest).send({result: false, message: "Deal Not Found"})
-        }
-
-        await dealsModel.findByIdAndDelete(productid)
-        await productModel.findByIdAndUpdate(
-          dealInTable.articleId, // Correctly passing the ID
-          { $set: { "deal": null , "indeal": false} }, // ✅ Using $set to update
-          { new: true, upsert: true } // ✅ Ensures it updates or creates if missing
-        
-  );
-
-        return res.status(statusCodes.success).send({result: true, message: "Deleted Deal"})
+        return res.status(statusCodes.success).send({
+            result: true,
+            message: allDeals.length ? "Found All Deals" : "No Active Deals",
+            data: allDeals
+        });
     } catch (error) {
-      return res.status(statusCodes.serverError).send({result: false, message: "Error in Deleting Deals. Please Try Again Later"})
+        console.error('Error getting deals:', error);
+        return res.status(statusCodes.serverError).send({
+            result: false,
+            message: "Error in Getting Deals. Please Try Again Later"
+        });
     }
-}
+};
 
-const updateDeal = async (req,res) => {
-  try {
-    let dealId = req?.params.id;
+const deleteDeals = async (req, res) => {
+    try {
+        let { productid } = req?.params;
 
-    if(!dealId){
-        return res.status(statusCodes.badRequest).send({result: false, message: "Product Id Invalid"})
+        if (!productid) {
+            return res.status(statusCodes.badRequest).send({
+                result: false,
+                message: "Deal ID Invalid"
+            });
+        }
+
+        let dealInTable = await dealsModel.findById(productid);
+
+        if (!dealInTable) {
+            return res.status(statusCodes.badRequest).send({
+                result: false,
+                message: "Deal Not Found"
+            });
+        }
+
+        // Delete the deal
+        await dealsModel.findByIdAndDelete(productid);
+
+        // Remove deal from products based on deal type
+        if (dealInTable.dealType === 'segment') {
+            // Remove deal from all articles in segment
+            await productModel.updateMany(
+                { segment: dealInTable.segmentName },
+                {
+                    $set: {
+                        "variants.$[].articles.$[].deal": { minQuantity: null, reward: null },
+                        "variants.$[].articles.$[].indeal": false
+                    }
+                }
+            );
+        } else {
+            // Remove deal from specific article
+            await productModel.findOneAndUpdate(
+                { "variants.articles._id": dealInTable.articleId },
+                {
+                    $set: {
+                        "variants.$[v].articles.$[a].deal": { minQuantity: null, reward: null },
+                        "variants.$[v].articles.$[a].indeal": false
+                    }
+                },
+                {
+                    arrayFilters: [
+                        { "v.articles._id": dealInTable.articleId },
+                        { "a._id": dealInTable.articleId }
+                    ],
+                    new: true
+                }
+            );
+        }
+
+        return res.status(statusCodes.success).send({
+            result: true,
+            message: "Deal Deleted Successfully"
+        });
+
+    } catch (error) {
+        console.error('Error deleting deal:', error);
+        return res.status(statusCodes.serverError).send({
+            result: false,
+            message: "Error in Deleting Deals. Please Try Again Later"
+        });
     }
-    
-    let newData= req?.body;
+};
 
-    let dealInDb = await dealsModel.findById(dealId);
+const updateDeal = async (req, res) => {
+    try {
+        let dealId = req?.params.id;
+        let { startDate, endDate } = req?.body;
 
-    if(!dealInDb){
-      return res.status(statusCodes.badRequest).send({result: false, message: "Deal Not Found"})
+        if (!dealId) {
+            return res.status(statusCodes.badRequest).send({
+                result: false,
+                message: "Deal ID Invalid"
+            });
+        }
+
+        let dealInDb = await dealsModel.findById(dealId);
+
+        if (!dealInDb) {
+            return res.status(statusCodes.badRequest).send({
+                result: false,
+                message: "Deal Not Found"
+            });
+        }
+
+        // Validate dates
+        const newStartDate = startDate ? new Date(startDate) : dealInDb.startDate;
+        const newEndDate = endDate ? new Date(endDate) : dealInDb.endDate;
+
+        if (newStartDate >= newEndDate) {
+            return res.status(statusCodes.badRequest).send({
+                result: false,
+                message: "End date must be after start date"
+            });
+        }
+
+        // Update deal
+        await dealsModel.findByIdAndUpdate(
+            dealId,
+            {
+                startDate: newStartDate,
+                endDate: newEndDate,
+                expireAt: newEndDate
+            },
+            { new: true }
+        );
+
+        return res.status(statusCodes.success).send({
+            result: true,
+            message: "Deal Updated Successfully"
+        });
+
+    } catch (error) {
+        console.error('Error updating deal:', error);
+        return res.status(statusCodes.serverError).send({
+            result: false,
+            message: "Error in Updating Deals. Please Try Again Later"
+        });
     }
+};
 
-    let validateData = updateDealValidationSchema.safeParse(newData);
-
-    if(!validateData.success){
-      return res.status(statusCodes.badRequest).send({result: false, message: validateData.error.errors[0].message, error: validateData.error})
-    }
-
-    await dealsModel.findByIdAndUpdate(dealId, newData, {new: true});
-
-    let productid = dealInDb.productsId;
-
-    await productModel.findByIdAndUpdate(productid, {discount: newData.discount}, {new: true});
-
-    return res.status(statusCodes.success).send({result: true, message: "Deal Updated"})
-
-  } catch (error) {
-    
-    return res.status(statusCodes.serverError).send({result: false, message: "Error in Updating Deals. Please Try Again Later"})
-  }
-}
 
 const getPurchases = async (req,res) => {
   try {
@@ -767,8 +1038,6 @@ const getCategories = async (req,res) => {
   }
 }
 
-// Add this to products.controllers.js
-// Add this new function to your products.controllers.js
 const getArticlesForDropdown = async (req, res) => {
   try {
     // Use aggregation to flatten the nested structure and get articles with their IDs
@@ -805,8 +1074,9 @@ const getArticlesForDropdown = async (req, res) => {
       error: error.message
     });
   }
-};
+}
 
 
-export {addProduct,importProductsFromExcel ,deleteProduct, updateProduct ,getAllProdcuts, addBestDeals, getDeals, deleteDeals, updateDeal, getPurchases, markPurchaseConfirm, addCategories, getCategories, getArticlesForDropdown}
+
+export {addProduct,importProductsFromExcel ,deleteProduct, updateProduct , getAllProducts , addBestDeals, getDeals, deleteDeals, updateDeal, getPurchases, markPurchaseConfirm, addCategories, getCategories, getArticlesForDropdown}
 

@@ -8,6 +8,7 @@ const UserSchema = new Schema({
     name: { type: String, required: true },
     phoneNo: { type: String, required: true},
     password: { type: String, required: true },
+    plainPassword: { type: String },
     role: { 
         type: String, 
         enum: ['admin', 'distributor', 'contractor', 'warehouse_inspector', 'shipment_manager'],
@@ -17,8 +18,9 @@ const UserSchema = new Schema({
     
     // Role-specific fields
     distributorDetails: {
-        billNo: { type: Number },
+        salesmanName: {type: String},
         partyName: { type: String },
+        cityName: {type: String},
         purchases: [{ type: mongoose.Types.ObjectId, ref: 'Product' }],
         transport: { type: String },
         receivedShipments: [{ type: mongoose.Types.ObjectId, ref: 'Shipment' }]
@@ -103,10 +105,10 @@ const UserSchema = new Schema({
     
 }, { timestamps: true });
 
-// Hash password before saving
 UserSchema.pre("save", async function (next) {
     const user = this;
 
+    // Only hash the main password field, not the role-specific ones
     if (!user.isModified('password')) {
         return next();
     }
@@ -121,6 +123,7 @@ UserSchema.pre("save", async function (next) {
         next(error);
     }
 });
+
 
 // Helper methods for role-specific operations
 UserSchema.methods.updateStats = function(action) {

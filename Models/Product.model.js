@@ -20,16 +20,21 @@ const articleSchema = new Schema({
     minQuantity: String,
     reward: String
   },
-  allColorsAvailable: { type: Boolean, default: false }
+  allColorsAvailable: { type: Boolean, default: false },
+  keywords: { type: [String], default: [] }  
 }, { timestamps: true });
+
 
 const variantSchema = new Schema({
   name: { type: String, required: true },
+  keywords: { type: [String], default: [] },  
   articles: [articleSchema]
 });
 
+
 const productSchema = new Schema({
   segment: { type: String, required: true },
+  keywords: { type: [String], default: [] },  
   variants: [variantSchema]
 }, { timestamps: true });
 

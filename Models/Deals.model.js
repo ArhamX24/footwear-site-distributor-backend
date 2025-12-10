@@ -1,30 +1,62 @@
 import mongoose from "mongoose";
-import productModel from "./Product.model.js";
 
 let {model, Schema} = mongoose;
 
 const DealsSchema = new Schema({
-    articleId: {type: Schema.Types.ObjectId, ref: 'Product'},
-    articleName: {type: String},
+    // Deal Type: 'segment' applies to all articles in a segment, 'article' applies to one article
+    dealType: {
+        type: String,
+        enum: ['segment', 'article'],
+        required: true,
+        default: 'article'
+    },
+    
+    // For Segment-wide Deals
+    segmentName: { type: String }, // e.g., "eva", "school shoe"
+    
+    // For Article-specific Deals
+    articleId: { type: Schema.Types.ObjectId },
+    articleName: { type: String },
+    variantName: { type: String },
+    
+    // Common Deal Fields
     startDate: { 
-      type: Date, 
+        type: Date,
+        required: true
     },
     endDate: { 
-      type: Date, 
+        type: Date,
+        required: true
     },
-    image: {type: String},
-    noOfPurchase: {type: String},
+    image: { type: String, required: true },
+    noOfPurchase: { type: Number, required: true }, // Minimum cartons required
     reward: { 
-        type: String, 
+        type: String,
+        required: true
     },
-    expireAt: { 
-      type: Date, 
-    },
-},{ timestamps: true });
+    
+    // Auto-expiry
+    expireAt: { type: Date },
+    
+    // Tracking
+    isActive: { type: Boolean, default: true },
+    totalRedemptions: { type: Number, default: 0 }
+}, { timestamps: true });
 
+// Indexes for performance
+DealsSchema.index({ dealType: 1, isActive: 1 });
+DealsSchema.index({ segmentName: 1 });
+DealsSchema.index({ articleId: 1 });
+DealsSchema.index({ expireAt: 1 });
 
+// Auto-set expireAt on save
+DealsSchema.pre('save', function(next) {
+    if (this.isModified('endDate')) {
+        this.expireAt = this.endDate;
+    }
+    next();
+});
 
-const dealsModel = model('Deal', DealsSchema)
+const dealsModel = model('Deal', DealsSchema);
 
-export default dealsModel
-
+export default dealsModel;
