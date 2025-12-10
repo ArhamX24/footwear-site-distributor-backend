@@ -104,13 +104,13 @@ inventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
   return this.save();
 };
 
-// ✅ Indexes for article-based lookup
-inventorySchema.index({ articleName: 1 });
+inventorySchema.index({ articleName: 1 }, { unique: true });
 inventorySchema.index({ productId: 1 });
 inventorySchema.index({ articleId: 1 });
 inventorySchema.index({ "items.qrCodeId": 1 });
 inventorySchema.index({ "items.uniqueId": 1 });
 inventorySchema.index({ "items.status": 1 });
+
 
 const Inventory = model("Inventory", inventorySchema);
 
