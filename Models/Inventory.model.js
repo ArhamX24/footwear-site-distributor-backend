@@ -5,12 +5,10 @@ const { Schema, model } = mongoose;
 const inventoryItemSchema = new Schema({
   qrCodeId: { type: Schema.Types.ObjectId, ref: "QRCode", required: true, unique: true },
   uniqueId: { type: String, required: true, unique: true },
-  articleName: { type: String, required: true },
   articleDetails: {
     colors: [String],
     sizes: [Number],
-    numberOfCartons: { type: Number, default: 1 }, // ✅ This is the key field
-    articleId: { type: Schema.Types.ObjectId, ref: "Product" }
+    numberOfCartons: { type: Number, default: 1 },
   },
   status: {
     type: String,
@@ -25,8 +23,15 @@ const inventoryItemSchema = new Schema({
   notes: String
 }, { timestamps: true });
 
+// ✅ NEW: Article-based inventory schema
 const inventorySchema = new Schema({
-  productId: { type: Schema.Types.ObjectId, ref: "Product", required: true, unique: true },
+  articleId: { type: Schema.Types.ObjectId, ref: "Product" }, // Reference to article in variants.articles
+  articleName: { type: String, required: true, index: true }, // ✅ KEY: Article name as primary identifier
+  productId: { type: Schema.Types.ObjectId, ref: "Product" }, // Reference to parent product
+  variantId: { type: Schema.Types.ObjectId }, // Reference to variant
+  segment: { type: String },
+  variantName: { type: String },
+  
   quantityByStage: {
     received: { type: Number, default: 0 },
     shipped: { type: Number, default: 0 }
@@ -36,27 +41,15 @@ const inventorySchema = new Schema({
   lastUpdated: { type: Date, default: Date.now }
 }, { timestamps: true });
 
-// Helper function to format sizes as range
-const formatSizeRange = (sizes) => {
-  if (!sizes || sizes.length === 0) return "N/A";
-  if (sizes.length === 1) return sizes[0].toString();
-  const sortedSizes = [...sizes].sort((a, b) => a - b);
-  return `${sortedSizes[0]}X${sortedSizes[sortedSizes.length - 1]}`;
-};
-
-// ✅ FIXED: Pre-save hook - Sum numberOfCartons instead of counting items
+// ✅ FIXED: Pre-save hook - Count unique QR scans, not cartons
 inventorySchema.pre("save", function(next) {
-  // Calculate received quantity by summing numberOfCartons for received items
-  this.quantityByStage.received = this.items
-    .filter(i => i.status === "received")
-    .reduce((sum, item) => sum + (item.articleDetails?.numberOfCartons || 1), 0);
+  // Count unique QR codes that are received (1 QR = 1 scan)
+  this.quantityByStage.received = this.items.filter(i => i.status === "received").length;
   
-  // Calculate shipped quantity by summing numberOfCartons for shipped items
-  this.quantityByStage.shipped = this.items
-    .filter(i => i.status === "shipped")
-    .reduce((sum, item) => sum + (item.articleDetails?.numberOfCartons || 1), 0);
+  // Count unique QR codes that are shipped (1 QR = 1 scan)
+  this.quantityByStage.shipped = this.items.filter(i => i.status === "shipped").length;
   
-  // Available quantity = received - shipped
+  // Available = received - shipped (in terms of QR scans)
   this.availableQuantity = this.quantityByStage.received - this.quantityByStage.shipped;
   
   this.lastUpdated = new Date();
@@ -77,24 +70,15 @@ inventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
     status = "shipped";
   }
 
-  let articleName = qrCode.articleName || 
-                   qrCode.contractorInput?.articleName || 
-                   qrCode.productReference?.articleName || 
-                   "Unknown Article";
-
-  let articleId = qrCode.contractorInput?.articleId || qrCode.productReference?.articleId;
-
   const idx = this.items.findIndex(i => i.qrCodeId.toString() === qrCodeId.toString());
 
   const baseItem = {
     qrCodeId: qrCode._id,
     uniqueId: qrCode.uniqueId,
-    articleName,
     articleDetails: {
       colors: qrCode.contractorInput?.colors || ["Unknown"],
       sizes: qrCode.contractorInput?.sizes || [0],
-      numberOfCartons: qrCode.contractorInput?.totalCartons || 1, // ✅ Get actual carton count
-      articleId: articleId
+      numberOfCartons: qrCode.contractorInput?.totalCartons || 1,
     },
     status,
     receivedAt: qrCode.warehouseDetails?.receivedAt,
@@ -111,27 +95,22 @@ inventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
     Object.assign(this.items[idx], baseItem);
   }
 
-  // ✅ FIXED: Recalculate using numberOfCartons sum
-  this.quantityByStage.received = this.items
-    .filter(i => i.status === "received")
-    .reduce((sum, item) => sum + (item.articleDetails?.numberOfCartons || 1), 0);
-  
-  this.quantityByStage.shipped = this.items
-    .filter(i => i.status === "shipped")
-    .reduce((sum, item) => sum + (item.articleDetails?.numberOfCartons || 1), 0);
-  
+  // Recalculate - count unique QR scans
+  this.quantityByStage.received = this.items.filter(i => i.status === "received").length;
+  this.quantityByStage.shipped = this.items.filter(i => i.status === "shipped").length;
   this.availableQuantity = this.quantityByStage.received - this.quantityByStage.shipped;
   this.lastUpdated = new Date();
 
   return this.save();
 };
 
-// Indexes
+// ✅ Indexes for article-based lookup
+inventorySchema.index({ articleName: 1 });
 inventorySchema.index({ productId: 1 });
+inventorySchema.index({ articleId: 1 });
 inventorySchema.index({ "items.qrCodeId": 1 });
 inventorySchema.index({ "items.uniqueId": 1 });
 inventorySchema.index({ "items.status": 1 });
-inventorySchema.index({ "items.distributorId": 1 });
 
 const Inventory = model("Inventory", inventorySchema);
 
