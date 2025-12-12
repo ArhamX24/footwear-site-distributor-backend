@@ -9,6 +9,7 @@ import generateOrderPerformaPDF from "../../Utils/orderPerformaGenerator.js"
 import purchaseProductModel from "../../Models/Purchasedproduct.model.js"
 import mongoose from "mongoose"
 import Inventory from "../../Models/Inventory.model.js"
+import Festive from "../../Models/Festivle.model.js"
 
 let cookieOption = {
     path: "/",
@@ -230,9 +231,8 @@ try {
 
 const getAllProducts = async (req, res) => {
   try {
-    let { page = 1, limit = 10, search = "" } = req.query;
+    let { page = 1, limit = 12, search = "" } = req.query;
     let { filterName = [], filterOption = [] } = req.query;
-    const includeInventory = true; // req.query
 
     try {
       filterName = JSON.parse(filterName);
@@ -242,10 +242,13 @@ const getAllProducts = async (req, res) => {
       filterOption = [];
     }
 
-    const skip = (page - 1) * limit;
+    const pageNum = Number(page);
+    const limitNum = Number(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Build match conditions
     const match = {};
 
-    // Build your top-level match for segment, variant, gender
     filterName.forEach((key, i) => {
       const vals = Array.isArray(filterOption[i]) ? filterOption[i] : [filterOption[i]].filter(v => v);
       if (!vals.length) return;
@@ -261,33 +264,21 @@ const getAllProducts = async (req, res) => {
       }
     });
 
-    // Aggregation pipeline
+    // ✅ CRITICAL: Build optimized pipeline with EARLY pagination
     const pipeline = [];
 
-    // ✅ Enhanced search with keywords support
-    if (search.trim()) {
-      const terms = search.trim().split(/\s+/);
-      pipeline.push({
-        $match: {
-          $or: terms.flatMap(t => [
-            { "variants.articles.name": { $regex: t, $options: "i" } },
-            { "variants.articles.gender": { $regex: t, $options: "i" } },
-            { "variants.articles.keywords": { $regex: t, $options: "i" } },  // ✅ Article keywords
-            { "variants.name": { $regex: t, $options: "i" } },
-            { "variants.keywords": { $regex: t, $options: "i" } },  // ✅ Variant keywords
-            { "segment": { $regex: t, $options: "i" } },
-            { "keywords": { $regex: t, $options: "i" } }  // ✅ Segment keywords
-          ])
-        }
-      });
-    }
-
-    // Apply top-level matches
+    // 1. Apply filters first
     if (Object.keys(match).length) {
       pipeline.push({ $match: match });
     }
 
-    // Filter variants array to only those whose name matched
+    // 2. ✅ APPLY SKIP AND LIMIT IMMEDIATELY (before any processing)
+    pipeline.push(
+      { $skip: skip },
+      { $limit: limitNum }
+    );
+
+    // 3. Filter variants if needed
     if (match["variants.name"]) {
       pipeline.push({
         $addFields: {
@@ -302,180 +293,74 @@ const getAllProducts = async (req, res) => {
       });
     }
 
-    // ✅ Filter articles by gender and search (including keywords)
-    pipeline.push({
-      $addFields: {
-        variants: {
-          $map: {
-            input: "$variants",
-            as: "v",
-            in: {
-              name: "$$v.name",
-              keywords: "$$v.keywords",  // ✅ Include variant keywords
-              articles: {
-                $filter: {
-                  input: "$$v.articles",
-                  as: "a",
-                  cond: {
-                    $and: [
-                      ...(match["variants.articles.gender"]
-                        ? [{ $in: ["$$a.gender", match["variants.articles.gender"].$in] }]
-                        : []),
-                      ...(search.trim()
-                        ? [{
-                            $or: [
-                              { $regexMatch: { input: "$$a.name", regex: search, options: "i" } },
-                              { $regexMatch: { input: "$$a.gender", regex: search, options: "i" } },
-                              // ✅ Search in article keywords array
-                              {
-                                $gt: [
-                                  {
-                                    $size: {
-                                      $filter: {
-                                        input: { $ifNull: ["$$a.keywords", []] },
-                                        as: "kw",
-                                        cond: { $regexMatch: { input: "$$kw", regex: search, options: "i" } }
-                                      }
-                                    }
-                                  },
-                                  0
-                                ]
-                              }
-                            ]
-                          }]
-                        : [])
-                    ]
+    // 4. Filter articles if needed
+    if (match["variants.articles.gender"]) {
+      pipeline.push({
+        $addFields: {
+          variants: {
+            $map: {
+              input: "$variants",
+              as: "v",
+              in: {
+                name: "$$v.name",
+                keywords: "$$v.keywords",
+                articles: {
+                  $filter: {
+                    input: "$$v.articles",
+                    as: "a",
+                    cond: { $in: ["$$a.gender", match["variants.articles.gender"].$in] }
                   }
                 }
               }
             }
           }
         }
-      }
-    });
+      });
+    }
 
-    // ADD INVENTORY DATA LOOKUP
-    if (includeInventory === true) {
-      pipeline.push(
-        // Lookup inventory data for this product
-        {
-          $lookup: {
-            from: "inventories",
-            localField: "_id",
-            foreignField: "productId",
-            as: "inventoryData"
-          }
-        },
-        // Unwind inventory data
-        {
-          $unwind: {
-            path: "$inventoryData",
-            preserveNullAndEmptyArrays: true
-          }
-        },
-        // ADD INVENTORY DETAILS TO EACH ARTICLE
-        {
-          $addFields: {
-            variants: {
-              $map: {
-                input: "$variants",
-                as: "variant",
-                in: {
-                  name: "$$variant.name",
-                  keywords: "$$variant.keywords",  // ✅ Keep variant keywords
-                  articles: {
-                    $map: {
-                      input: "$$variant.articles",
-                      as: "article",
-                      in: {
-                        // Original article fields (excluding colors/sizes from schema)
-                        name: "$$article.name",
-                        images: "$$article.images",
-                        gender: "$$article.gender",
-                        indeal: "$$article.indeal",
-                        deal: "$$article.deal",
-                        allColorsAvailable: "$$article.allColorsAvailable",
-                        _id: "$$article._id",
-                        keywords: "$$article.keywords",  // ✅ Include article keywords
-                        // GET COLORS FROM INVENTORY ONLY
-                        colors: {
-                          $let: {
-                            vars: {
-                              articleInventory: {
-                                $filter: {
-                                  input: { $ifNull: ["$inventoryData.items", []] },
-                                  as: "invItem",
-                                  cond: {
-                                    $and: [
-                                      { $eq: ["$$invItem.articleName", "$$article.name"] },
-                                      { $eq: ["$$invItem.status", "received"] },
-                                      { $gt: ["$$invItem.articleDetails.numberOfCartons", 0] }
-                                    ]
-                                  }
-                                }
-                              }
-                            },
-                            in: {
-                              $reduce: {
-                                input: "$$articleInventory.articleDetails.colors",
-                                initialValue: [],
-                                in: { $setUnion: ["$$value", "$$this"] }
+    // 5. Lightweight inventory lookup (optional - can be removed for even faster loading)
+    pipeline.push(
+      {
+        $lookup: {
+          from: "inventories",
+          localField: "_id",
+          foreignField: "productId",
+          as: "inventoryData"
+        }
+      },
+      {
+        $addFields: {
+          variants: {
+            $map: {
+              input: "$variants",
+              as: "variant",
+              in: {
+                name: "$$variant.name",
+                keywords: "$$variant.keywords",
+                articles: {
+                  $map: {
+                    input: "$$variant.articles",
+                    as: "article",
+                    in: {
+                      _id: "$$article._id",
+                      name: "$$article.name",
+                      images: "$$article.images",
+                      gender: "$$article.gender",
+                      keywords: "$$article.keywords",
+                      // Simplified - just check if has inventory
+                      hasInventory: {
+                        $gt: [
+                          {
+                            $size: {
+                              $filter: {
+                                input: { $ifNull: [{ $arrayElemAt: ["$inventoryData.items", 0] }, []] },
+                                as: "inv",
+                                cond: { $eq: ["$$inv.articleName", "$$article.name"] }
                               }
                             }
-                          }
-                        },
-                        // GET SIZES FROM INVENTORY ONLY
-                        sizes: {
-                          $let: {
-                            vars: {
-                              articleInventory: {
-                                $filter: {
-                                  input: { $ifNull: ["$inventoryData.items", []] },
-                                  as: "invItem",
-                                  cond: {
-                                    $and: [
-                                      { $eq: ["$$invItem.articleName", "$$article.name"] },
-                                      { $eq: ["$$invItem.status", "received"] },
-                                      { $gt: ["$$invItem.articleDetails.numberOfCartons", 0] }
-                                    ]
-                                  }
-                                }
-                              }
-                            },
-                            in: {
-                              $reduce: {
-                                input: "$$articleInventory.articleDetails.sizes",
-                                initialValue: [],
-                                in: { $setUnion: ["$$value", "$$this"] }
-                              }
-                            }
-                          }
-                        },
-                        // SIMPLE INVENTORY OBJECT WITH JUST TOTALCARTONS
-                        inventory: {
-                          $let: {
-                            vars: {
-                              articleInventory: {
-                                $filter: {
-                                  input: { $ifNull: ["$inventoryData.items", []] },
-                                  as: "invItem",
-                                  cond: {
-                                    $and: [
-                                      { $eq: ["$$invItem.articleName", "$$article.name"] },
-                                      { $eq: ["$$invItem.status", "received"] },
-                                      { $gt: ["$$invItem.articleDetails.numberOfCartons", 0] }
-                                    ]
-                                  }
-                                }
-                              }
-                            },
-                            in: {
-                              totalCartons: {
-                                $sum: "$$articleInventory.articleDetails.numberOfCartons"
-                              }
-                            }
-                          }
-                        }
+                          },
+                          0
+                        ]
                       }
                     }
                   }
@@ -483,32 +368,27 @@ const getAllProducts = async (req, res) => {
               }
             }
           }
-        },
-        // Remove inventory raw data from response
-        { $unset: "inventoryData" }
-      );
-    }
-
-    // Pagination
-    pipeline.push(
-      { $skip: skip },
-      { $limit: Number(limit) }
+        }
+      },
+      { $unset: "inventoryData" }
     );
 
     const results = await productModel.aggregate(pipeline);
 
     return res.status(200).json({
       result: !!results.length,
-      message: results.length ? "Products fetched successfully" : "No products matched",
+      message: results.length ? "Products fetched" : "No products found",
       data: results,
       pagination: {
-        page: Number(page),
-        limit: Number(limit),
-        total: results.length
+        page: pageNum,
+        limit: limitNum,
+        hasMore: results.length === limitNum,
+        count: results.length
       }
     });
+
   } catch (err) {
-    console.error(err);
+    console.error("Error in getAllProducts:", err);
     res.status(500).json({
       result: false,
       message: "Error fetching products",
@@ -516,6 +396,7 @@ const getAllProducts = async (req, res) => {
     });
   }
 };
+
 
 
 const fetchFilters = async (req, res) => {
@@ -624,72 +505,75 @@ const fetchArticleDetailsFromInventory = async (req, res) => {
       });
     }
 
-    // Find all inventory documents that contain items with the specified articleId
-    const inventories = await Inventory.find({
-      'items.articleDetails.articleId': articleId
-    }).populate('productId', 'name description'); // Optional: populate product details
+    console.log(`[INVENTORY] Searching for articleId: ${articleId}`);
 
-    if (!inventories || inventories.length === 0) {
+    // ✅ FIXED: Search by top-level articleId, not nested
+    const inventory = await Inventory.findOne({ 
+      articleId: articleId.toString() 
+    }).populate('productId', 'name segment');
+
+    if (!inventory) {
+      console.log(`[INVENTORY] No inventory found for articleId: ${articleId}`);
       return res.status(404).json({ 
         message: "No inventory found for this article ID",
         success: false 
       });
     }
 
-    // Aggregate data from all matching items across inventories
+    console.log(`[INVENTORY] Found inventory:`, {
+      articleId: inventory.articleId,
+      articleName: inventory.articleName,
+      totalItems: inventory.items.length
+    });
+
+    // Aggregate data from items with status 'received'
     let allColors = new Set();
     let allSizes = new Set();
-    let totalAvailableStock = 0;
-    let articleName = '';
     let receivedItems = 0;
     let shippedItems = 0;
 
-    inventories.forEach(inventory => {
-      // Filter items that match the articleId
-      const matchingItems = inventory.items.filter(item => 
-        item.articleDetails.articleId && 
-        item.articleDetails.articleId.toString() === articleId.toString()
-      );
+    // Process all items in this inventory
+    inventory.items.forEach(item => {
+      // Collect colors from received items only
+      if (item.status === 'received' && item.articleDetails?.colors && Array.isArray(item.articleDetails.colors)) {
+        item.articleDetails.colors.forEach(color => {
+          if (color && color !== 'Unknown' && color.toLowerCase() !== 'unknown') {
+            allColors.add(color.toLowerCase());
+          }
+        });
+      }
 
-      matchingItems.forEach(item => {
-        // Set article name (take from first item)
-        if (!articleName && item.articleName) {
-          articleName = item.articleName;
-        }
+      // Collect sizes from received items only
+      if (item.status === 'received' && item.articleDetails?.sizes && Array.isArray(item.articleDetails.sizes)) {
+        item.articleDetails.sizes.forEach(size => {
+          if (size && size !== 0) {
+            allSizes.add(Number(size));
+          }
+        });
+      }
 
-        // Collect colors
-        if (item.articleDetails.colors && Array.isArray(item.articleDetails.colors)) {
-          item.articleDetails.colors.forEach(color => {
-            if (color && color !== 'Unknown') {
-              allColors.add(color);
-            }
-          });
-        }
-
-        // Collect sizes
-        if (item.articleDetails.sizes && Array.isArray(item.articleDetails.sizes)) {
-          item.articleDetails.sizes.forEach(size => {
-            if (size && size !== 0) {
-              allSizes.add(size);
-            }
-          });
-        }
-
-        // Count items by status
-        if (item.status === 'received') {
-          receivedItems++;
-        } else if (item.status === 'shipped') {
-          shippedItems++;
-        }
-      });
+      // Count items by status
+      if (item.status === 'received') {
+        receivedItems++;
+      } else if (item.status === 'shipped') {
+        shippedItems++;
+      }
     });
 
-    // Calculate available stock (received - shipped)
-    totalAvailableStock = receivedItems - shippedItems;
+    // Calculate available stock
+    const totalAvailableStock = Math.max(0, receivedItems - shippedItems);
 
     // Convert Sets to sorted arrays
     const colors = Array.from(allColors).sort();
     const sizes = Array.from(allSizes).sort((a, b) => a - b);
+
+    console.log(`[INVENTORY] Aggregated data:`, {
+      colors: colors.length,
+      sizes: sizes.length,
+      received: receivedItems,
+      shipped: shippedItems,
+      available: totalAvailableStock
+    });
 
     // Helper function to format size range
     const formatSizeRange = (sizes) => {
@@ -703,27 +587,34 @@ const fetchArticleDetailsFromInventory = async (req, res) => {
     const response = {
       success: true,
       data: {
-        articleId,
-        articleName: articleName || 'Unknown Article',
-        colors: colors.length > 0 ? colors : ['N/A'],
-        sizes: sizes.length > 0 ? sizes : [0],
+        articleId: inventory.articleId,
+        articleName: inventory.articleName || 'Unknown Article',
+        segment: inventory.segment || 'Unknown',
+        variantName: inventory.variantName || 'Unknown',
+        colors: colors.length > 0 ? colors : [],
+        sizes: sizes.length > 0 ? sizes : [],
         sizeRange: formatSizeRange(sizes),
-        availableStock: Math.max(0, totalAvailableStock), // Ensure non-negative
+        availableStock: totalAvailableStock,
         stockBreakdown: {
           received: receivedItems,
           shipped: shippedItems,
-          available: Math.max(0, totalAvailableStock)
+          available: totalAvailableStock
         },
-        totalInventoryDocuments: inventories.length,
-        lastUpdated: inventories.reduce((latest, inv) => {
-          return (!latest || inv.lastUpdated > latest) ? inv.lastUpdated : latest;
-        }, null)
+        productInfo: inventory.productId ? {
+          id: inventory.productId._id,
+          name: inventory.productId.name,
+          segment: inventory.productId.segment
+        } : null,
+        lastUpdated: inventory.lastUpdated || inventory.updatedAt
       }
     };
+
+    console.log(`[INVENTORY] ✅ Returning response:`, response.data);
 
     return res.status(200).json(response);
 
   } catch (error) {
+    console.error('[INVENTORY] Error:', error);
     return res.status(500).json({ 
       message: "Error fetching article details from inventory",
       success: false,
@@ -732,43 +623,45 @@ const fetchArticleDetailsFromInventory = async (req, res) => {
   }
 };
 
+
 const searchProducts = async (req, res) => {
   try {
     let { page = 1, limit = 12, search = "" } = req.query;
     
-    const skip = (page - 1) * limit;
+    const pageNum = Number(page);
+    const limitNum = Number(limit);
+    const skip = (pageNum - 1) * limitNum;
     
     if (!search || !search.trim()) {
       return res.status(200).json({
         result: false,
-        message: "Search query is required",
+        message: "Search query required",
         data: [],
-        pagination: { page: Number(page), limit: Number(limit), total: 0 }
+        pagination: { page: pageNum, limit: limitNum, hasMore: false }
       });
     }
 
-    const searchTerms = search.trim().toLowerCase().split(/\s+/);
+    const searchTerm = search.trim();
     
-    // Build comprehensive search pipeline
+    // ✅ OPTIMIZED: Pagination first, then process
     const pipeline = [
       {
         $match: {
           $or: [
-            // Search in segment
-            { segment: { $regex: search.trim(), $options: "i" } },
-            // Search in segment keywords
-            { keywords: { $elemMatch: { $regex: search.trim(), $options: "i" } } },
-            // Search in variants
-            { "variants.name": { $regex: search.trim(), $options: "i" } },
-            { "variants.keywords": { $elemMatch: { $regex: search.trim(), $options: "i" } } },
-            // Search in articles
-            { "variants.articles.name": { $regex: search.trim(), $options: "i" } },
-            { "variants.articles.gender": { $regex: search.trim(), $options: "i" } },
-            { "variants.articles.keywords": { $elemMatch: { $regex: search.trim(), $options: "i" } } }
+            { segment: { $regex: searchTerm, $options: "i" } },
+            { keywords: { $elemMatch: { $regex: searchTerm, $options: "i" } } },
+            { "variants.name": { $regex: searchTerm, $options: "i" } },
+            { "variants.keywords": { $elemMatch: { $regex: searchTerm, $options: "i" } } },
+            { "variants.articles.name": { $regex: searchTerm, $options: "i" } },
+            { "variants.articles.gender": { $regex: searchTerm, $options: "i" } },
+            { "variants.articles.keywords": { $elemMatch: { $regex: searchTerm, $options: "i" } } }
           ]
         }
       },
-      // Filter variants that match search
+      // ✅ EARLY PAGINATION
+      { $skip: skip },
+      { $limit: limitNum },
+      // Filter matching articles
       {
         $addFields: {
           variants: {
@@ -784,20 +677,10 @@ const searchProducts = async (req, res) => {
                     as: "article",
                     cond: {
                       $or: [
-                        // Match article name
-                        { $regexMatch: { input: "$$article.name", regex: search.trim(), options: "i" } },
-                        // Match article gender
-                        { $regexMatch: { input: "$$article.gender", regex: search.trim(), options: "i" } },
-                        // Match article keywords
-                        { $gt: [{ $size: { $filter: { input: { $ifNull: ["$$article.keywords", []] }, as: "kw", cond: { $regexMatch: { input: "$$kw", regex: search.trim(), options: "i" } } } } }, 0] },
-                        // Match segment
-                        { $regexMatch: { input: "$segment", regex: search.trim(), options: "i" } },
-                        // Match segment keywords
-                        { $gt: [{ $size: { $filter: { input: { $ifNull: ["$keywords", []] }, as: "kw", cond: { $regexMatch: { input: "$$kw", regex: search.trim(), options: "i" } } } } }, 0] },
-                        // Match variant name
-                        { $regexMatch: { input: "$$variant.name", regex: search.trim(), options: "i" } },
-                        // Match variant keywords
-                        { $gt: [{ $size: { $filter: { input: { $ifNull: ["$$variant.keywords", []] }, as: "kw", cond: { $regexMatch: { input: "$$kw", regex: search.trim(), options: "i" } } } } }, 0] }
+                        { $regexMatch: { input: "$$article.name", regex: searchTerm, options: "i" } },
+                        { $regexMatch: { input: "$$article.gender", regex: searchTerm, options: "i" } },
+                        { $regexMatch: { input: "$segment", regex: searchTerm, options: "i" } },
+                        { $regexMatch: { input: "$$variant.name", regex: searchTerm, options: "i" } }
                       ]
                     }
                   }
@@ -807,7 +690,7 @@ const searchProducts = async (req, res) => {
           }
         }
       },
-      // Remove variants with no articles
+      // Remove empty variants
       {
         $addFields: {
           variants: {
@@ -819,13 +702,8 @@ const searchProducts = async (req, res) => {
           }
         }
       },
-      // Only keep products with matching variants
-      {
-        $match: {
-          "variants.0": { $exists: true }
-        }
-      },
-      // Lookup inventory data
+      { $match: { "variants.0": { $exists: true } } },
+      // Lightweight inventory
       {
         $lookup: {
           from: "inventories",
@@ -835,13 +713,6 @@ const searchProducts = async (req, res) => {
         }
       },
       {
-        $unwind: {
-          path: "$inventoryData",
-          preserveNullAndEmptyArrays: true
-        }
-      },
-      // Add inventory details to articles
-      {
         $addFields: {
           variants: {
             $map: {
@@ -849,98 +720,20 @@ const searchProducts = async (req, res) => {
               as: "variant",
               in: {
                 name: "$$variant.name",
-                keywords: "$$variant.keywords",
                 articles: {
                   $map: {
                     input: "$$variant.articles",
                     as: "article",
                     in: {
+                      _id: "$$article._id",
                       name: "$$article.name",
                       images: "$$article.images",
                       gender: "$$article.gender",
-                      indeal: "$$article.indeal",
-                      deal: "$$article.deal",
-                      allColorsAvailable: "$$article.allColorsAvailable",
-                      _id: "$$article._id",
-                      keywords: "$$article.keywords",
-                      // Get colors from inventory
-                      colors: {
-                        $let: {
-                          vars: {
-                            articleInventory: {
-                              $filter: {
-                                input: { $ifNull: ["$inventoryData.items", []] },
-                                as: "invItem",
-                                cond: {
-                                  $and: [
-                                    { $eq: ["$$invItem.articleName", "$$article.name"] },
-                                    { $eq: ["$$invItem.status", "received"] },
-                                    { $gt: ["$$invItem.articleDetails.numberOfCartons", 0] }
-                                  ]
-                                }
-                              }
-                            }
-                          },
-                          in: {
-                            $reduce: {
-                              input: "$$articleInventory.articleDetails.colors",
-                              initialValue: [],
-                              in: { $setUnion: ["$$value", "$$this"] }
-                            }
-                          }
-                        }
-                      },
-                      // Get sizes from inventory
-                      sizes: {
-                        $let: {
-                          vars: {
-                            articleInventory: {
-                              $filter: {
-                                input: { $ifNull: ["$inventoryData.items", []] },
-                                as: "invItem",
-                                cond: {
-                                  $and: [
-                                    { $eq: ["$$invItem.articleName", "$$article.name"] },
-                                    { $eq: ["$$invItem.status", "received"] },
-                                    { $gt: ["$$invItem.articleDetails.numberOfCartons", 0] }
-                                  ]
-                                }
-                              }
-                            }
-                          },
-                          in: {
-                            $reduce: {
-                              input: "$$articleInventory.articleDetails.sizes",
-                              initialValue: [],
-                              in: { $setUnion: ["$$value", "$$this"] }
-                            }
-                          }
-                        }
-                      },
-                      // Inventory count
-                      inventory: {
-                        $let: {
-                          vars: {
-                            articleInventory: {
-                              $filter: {
-                                input: { $ifNull: ["$inventoryData.items", []] },
-                                as: "invItem",
-                                cond: {
-                                  $and: [
-                                    { $eq: ["$$invItem.articleName", "$$article.name"] },
-                                    { $eq: ["$$invItem.status", "received"] },
-                                    { $gt: ["$$invItem.articleDetails.numberOfCartons", 0] }
-                                  ]
-                                }
-                              }
-                            }
-                          },
-                          in: {
-                            totalCartons: {
-                              $sum: "$$articleInventory.articleDetails.numberOfCartons"
-                            }
-                          }
-                        }
+                      hasInventory: {
+                        $gt: [
+                          { $size: { $filter: { input: { $ifNull: [{ $arrayElemAt: ["$inventoryData.items", 0] }, []] }, as: "inv", cond: { $eq: ["$$inv.articleName", "$$article.name"] } } } },
+                          0
+                        ]
                       }
                     }
                   }
@@ -950,23 +743,20 @@ const searchProducts = async (req, res) => {
           }
         }
       },
-      // Remove inventory raw data
-      { $unset: "inventoryData" },
-      // Pagination
-      { $skip: skip },
-      { $limit: Number(limit) }
+      { $unset: "inventoryData" }
     ];
 
     const results = await productModel.aggregate(pipeline);
 
     return res.status(200).json({
       result: !!results.length,
-      message: results.length ? "Products found" : "No products matched your search",
+      message: results.length ? "Products found" : "No matches",
       data: results,
       pagination: {
-        page: Number(page),
-        limit: Number(limit),
-        total: results.length
+        page: pageNum,
+        limit: limitNum,
+        hasMore: results.length === limitNum,
+        count: results.length
       }
     });
 
@@ -974,15 +764,82 @@ const searchProducts = async (req, res) => {
     console.error("Search error:", err);
     res.status(500).json({
       result: false,
-      message: "Error searching products",
+      message: "Search failed",
       error: err.message
     });
   }
 };
 
+const getCombinedOffers = async (req, res) => {
+    try {
+        const currentDate = new Date();
 
+        // Fetch active deals and festivals in parallel
+        const [activeDeals, activeFestivals] = await Promise.all([
+            // Get active deals that haven't expired
+            dealsModel.find({
+                isActive: true,
+                endDate: { $gte: currentDate }
+            })
+            .select('image dealName startDate endDate')
+            .sort({ startDate: -1 })
+            .lean(),
 
+            // Get active festivals that haven't expired
+            Festive.find({
+                endDate: { $gte: currentDate }
+            })
+            .select('image startDate endDate')
+            .sort({ startDate: -1 })
+            .lean()
+        ]);
 
-export {login, purchaseProduct, getAllProducts,fetchFilters, fetchProductData, fetchAllDealsImages, generateOrderPerforma, getDistributor, fetchArticleDetailsFromInventory, searchProducts, getPastOrders}
+        // Transform deals data
+        const dealsData = activeDeals.map(deal => ({
+            image: deal.image,
+            type: 'deal',
+            name: deal.dealName,
+            startDate: deal.startDate,
+            endDate: deal.endDate,
+            _id: deal._id
+        }));
+
+        // Transform festivals data
+        const festivalsData = activeFestivals.map(festival => ({
+            image: festival.image,
+            type: 'festival',
+            startDate: festival.startDate,
+            endDate: festival.endDate,
+            _id: festival._id
+        }));
+
+        // Combine both arrays
+        const combinedOffers = [...dealsData, ...festivalsData];
+
+        // Sort by startDate (newest first)
+        combinedOffers.sort((a, b) => new Date(b.startDate) - new Date(a.startDate));
+
+        return res.status(200).json({
+            result: true,
+            message: "Combined offers fetched successfully",
+            data: combinedOffers,
+            count: {
+                deals: dealsData.length,
+                festivals: festivalsData.length,
+                total: combinedOffers.length
+            }
+        });
+
+    } catch (error) {
+        console.error("Error fetching combined offers:", error);
+        return res.status(500).json({
+            result: false,
+            message: "Failed to fetch offers",
+            error: error.message
+        });
+    }
+};
+
+export {login, purchaseProduct, getAllProducts,fetchFilters, fetchProductData, fetchAllDealsImages, generateOrderPerforma, getDistributor, fetchArticleDetailsFromInventory, searchProducts, getPastOrders, getCombinedOffers}
 
 

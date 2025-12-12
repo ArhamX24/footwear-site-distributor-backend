@@ -7,8 +7,8 @@ const shipmentRouter = express.Router();
 
 shipmentRouter.post("/scan/:uniqueId", shipmentOnly, scanQRCode)
 .post('/receipt/generate', generateShipmentReceiptPDF)
-.get('/api/v1/shipment/all', getAllShipments)
-.get('/api/v1/shipment/details/:id', getShipmentDetails)
+.get('/all', getAllShipments)
+.get('/details/:id', getShipmentDetails)
 
 export default shipmentRouter;
 

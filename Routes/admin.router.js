@@ -51,6 +51,7 @@ import {
   getAutoDeleteSettings,
   updateAutoDeleteSettings,
   cleanupOldShipments,
+  generateShipmentPerforma
 } from '../Controllers/Admin/shipment.controllers.js'
 import upload from "../MIddlewares/multer.middleware.js";
 import multer from "multer";
@@ -128,6 +129,7 @@ adminRouter.post("/register", register)
 .get("/shipments", adminOnly, getAllShipments)
 .get("/shipments/:shipmentId", adminOnly, getShipmentDetails)
 .get("/shipments/view-details/:shipmentId", adminOnly, getShipmentDetails)
+.get('/shipments/performa/:shipmentId', adminOnly, generateShipmentPerforma)
 
 // Auto-delete settings management routes
 .get("/shipments/auto-delete-settings", adminOnly, getAutoDeleteSettings)

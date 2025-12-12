@@ -84,86 +84,91 @@ let cookieOption = {
     sameSite: 'none'
   }
 
-// ✅ Generate clean QR with HTML labels (converted to image)
 const generateQRWithLabel = async (qrString, labelData) => {
   try {
-    
-    // ✅ First generate pure QR code
+    // First generate pure QR code
     const qrCodeDataURL = await QRCodeLib.toDataURL(qrString, {
       width: 200,
       margin: 2,
-      color: { 
+      color: {
         dark: '#000000',
         light: '#FFFFFF'
       },
       errorCorrectionLevel: 'M'
     });
 
-    // ✅ Format sizes properly
+    // Format sizes properly
     let sizesText = 'N/A';
-    if (labelData.sizes && Array.isArray(labelData.sizes)) {
-      if (labelData.sizes.length === 1) {
-        sizesText = labelData.sizes[0].toString();
-      } else if (labelData.sizes.length > 1) {
-        const sorted = [...labelData.sizes].sort((a, b) => a - b);
-        sizesText = `${sorted[0]}X${sorted[sorted.length - 1]}`;
+    if (labelData.sizes) {
+      if (Array.isArray(labelData.sizes)) {
+        if (labelData.sizes.length === 1) {
+          sizesText = labelData.sizes[0].toString();
+        } else if (labelData.sizes.length > 1) {
+          const sorted = [...labelData.sizes].sort((a, b) => a - b);
+          sizesText = `${sorted[0]}X${sorted[sorted.length - 1]}`;
+        }
+      } else {
+        sizesText = labelData.sizes.toString();
       }
-    } else if (labelData.sizes) {
-      sizesText = labelData.sizes.toString();
     }
 
-    // ✅ Create canvas for combining QR with labels
-    const canvas = createCanvas(280, 350);
+    // ✅ FIXED: Create canvas WITHOUT carton number (smaller height)
+    const canvas = createCanvas(280, 320); // Reduced from 350
     const ctx = canvas.getContext('2d');
 
     // White background
     ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(0, 0, 280, 350);
+    ctx.fillRect(0, 0, 280, 320);
 
-    // ✅ Add labels at the top
+    // Add labels at the top (NO CARTON NUMBER)
     ctx.fillStyle = '#000000';
-    ctx.font = 'bold 12px Arial';
+    ctx.font = 'bold 14px Arial';
     ctx.textAlign = 'center';
 
     let yPos = 20;
+    
     ctx.fillText(`Article: ${labelData.articleName}`, 140, yPos);
-    yPos += 18;
-    ctx.fillText(`Colors: ${labelData.colors}`, 140, yPos);
-    yPos += 18;
-    ctx.fillText(`Sizes: ${sizesText}`, 140, yPos);
-    yPos += 18;
-    ctx.fillText(`Carton No: ${labelData.cartonNo}`, 140, yPos);
     yPos += 20;
+    ctx.fillText(`Colors: ${labelData.colors}`, 140, yPos);
+    yPos += 20;
+    ctx.fillText(`Sizes: ${sizesText}`, 140, yPos);
+    yPos += 25;
 
-    // ✅ Add separator line
+    // Add separator line
     ctx.strokeStyle = '#cccccc';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(20, yPos);
     ctx.lineTo(260, yPos);
     ctx.stroke();
+
     yPos += 15;
 
-    // ✅ Load and add QR code
+    // Load and add QR code
     const qrImage = await loadImage(qrCodeDataURL);
     ctx.drawImage(qrImage, 40, yPos, 200, 200);
+
     yPos += 210;
 
-    // ✅ Add footer text
+    // Add footer text
     ctx.font = '10px Arial';
     ctx.fillStyle = '#666666';
-    ctx.fillText('Scan to track carton', 140, yPos);
+    ctx.fillText('Scan to track', 140, yPos);
 
-    // ✅ Convert to data URL
+    // Convert to data URL
     const finalImage = canvas.toDataURL('image/png');
     return finalImage;
-
+    
   } catch (error) {
-    // ✅ Fallback to pure QR
+    console.error('[QR-LABEL] Error generating labeled QR:', error);
+    // Fallback to pure QR
     return await QRCodeLib.toDataURL(qrString, {
       width: 200,
       margin: 2,
-      color: { dark: '#000000', light: '#FFFFFF' },
+      color: {
+        dark: '#000000',
+        light: '#FFFFFF'
+      },
       errorCorrectionLevel: 'M'
     });
   }
@@ -537,8 +542,8 @@ try {
 const generateQRCodes = async (req, res) => {
   try {
     const { articleId, articleName, colors, sizes, numberOfQRs } = req.body;
-    const userId = req.user?._id;
-    // Basic validation
+    const userId = req.user?.id;
+
     if (!articleId || !articleName || !colors || !sizes || !numberOfQRs) {
       return res.status(400).json({
         result: false,
@@ -549,22 +554,28 @@ const generateQRCodes = async (req, res) => {
     // Get article data
     const objectId = new mongoose.Types.ObjectId(articleId);
     const articleData = await Product.aggregate([
-      { $unwind: "$variants" },
-      { $unwind: "$variants.articles" },
-      { $match: { "variants.articles._id": objectId } },
-      { $project: { 
-        articleId: "$variants.articles._id", 
-        articleName: "$variants.articles.name", 
-        productId: "$_id",
-        variantId: "$variants._id",
-        variantName: "$variants.name"
-      }},
+      { $unwind: '$variants' },
+      { $unwind: '$variants.articles' },
+      { $match: { 'variants.articles._id': objectId } },
+      {
+        $project: {
+          articleId: '$variants.articles._id',
+          articleName: '$variants.articles.name',
+          articleImage: '$variants.articles.image',
+          productId: '$_id',
+          variantId: '$variants._id',
+          variantName: '$variants.name',
+          segment: '$segment'
+        }
+      },
       { $limit: 1 }
     ]);
 
-
     if (!articleData.length) {
-      return res.status(404).json({ result: false, message: 'Article not found' });
+      return res.status(404).json({
+        result: false,
+        message: 'Article not found'
+      });
     }
 
     const article = articleData[0];
@@ -573,21 +584,20 @@ const generateQRCodes = async (req, res) => {
     const batchId = `BATCH_${Date.now()}`;
     const qrCodes = [];
 
-    // Generate QR codes with labels
+    // ✅ FIXED: Generate QR codes with cartonNumber and totalCartons
     for (let i = 1; i <= numberOfQRs; i++) {
       const uniqueId = uuidv4();
 
-      // ✅ QR data structure
       const qrData = {
         uniqueId,
         articleName,
         contractorInput: {
           articleName,
-          articleId: article.articleId,
+          articleId: article.articleId.toString(), // Convert to string
           colors: colorsArray,
           sizes: sizesArray,
-          cartonNumber: i,
-          totalCartons: numberOfQRs
+          cartonNumber: i,  // ✅ FIXED: Add carton number (1, 2, 3...)
+          totalCartons: numberOfQRs  // ✅ FIXED: Add total cartons
         },
         batchId,
         status: 'generated'
@@ -595,22 +605,20 @@ const generateQRCodes = async (req, res) => {
 
       const qrString = JSON.stringify(qrData);
 
-      // ✅ Generate QR with labels on top
+      // Generate QR with label (NO carton number on label)
       const qrCodeImage = await generateQRWithLabel(qrString, {
         articleName,
         colors: colorsArray.join(', '),
-        sizes: sizesArray,
-        cartonNo: i
+        sizes: sizesArray
       });
 
-      // Save to DB
+      // ✅ FIXED: Save to DB with proper ObjectId and required fields
       const qrDoc = new QRCode({
         uniqueId,
         articleName,
         qrData: qrString,
         qrImagePath: qrCodeImage,
-        status: 'manufactured', // ✅ Initial status
-        
+        status: 'generated',
         productReference: {
           productId: article.productId,
           variantId: article.variantId,
@@ -618,29 +626,27 @@ const generateQRCodes = async (req, res) => {
           variantName: article.variantName,
           articleName: article.articleName,
           isMatched: true,
-          matchedBy: req.user?._id,
+          matchedBy: new mongoose.Types.ObjectId(userId), // ✅ FIXED: Convert to ObjectId
           matchedAt: new Date()
         },
-        
-        batchInfo: { 
-          contractorId: userId, 
-          batchId 
+        batchInfo: {
+          contractorId: new mongoose.Types.ObjectId(userId), // ✅ FIXED: Convert to ObjectId
+          batchId
         },
-        
         contractorInput: {
           articleName,
+          articleId: article.articleId.toString(),
           colors: colorsArray,
           sizes: sizesArray,
-          cartonNumber: i,
-          totalCartons: numberOfQRs
+          cartonNumber: i,  // ✅ FIXED: Required field
+          totalCartons: numberOfQRs  // ✅ FIXED: Required field
         },
-
         manufacturingDetails: {
           manufacturedAt: new Date(),
-          manufacturedBy: { 
-            userId, 
-            userType: 'contractor', 
-            name: req.user?.name || 'Contractor'
+          manufacturedBy: {
+            userId: new mongoose.Types.ObjectId(userId), // ✅ FIXED: Convert to ObjectId
+            userType: 'contractor',
+            name: req.user?.name
           }
         }
       });
@@ -650,30 +656,29 @@ const generateQRCodes = async (req, res) => {
       qrCodes.push({
         uniqueId,
         qrCodeImage,
-        cartonNumber: i,
-        batchId,
-        // ✅ Label info for frontend display
+        cartonNumber: i,  // ✅ Include carton number in response
         labelInfo: {
           articleName,
           colors: colorsArray.join(', '),
-          sizes: sizesArray.length === 1 ? sizesArray[0] : `${Math.min(...sizesArray)}X${Math.max(...sizesArray)}`,
-          cartonNo: i
+          sizes: sizesArray.length === 1 ? sizesArray[0] : `${Math.min(...sizesArray)}X${Math.max(...sizesArray)}`
         }
       });
     }
 
     res.json({
       result: true,
-      message: `Generated ${numberOfQRs} QR codes with labels`,
-      data: { 
-        batchId, 
+      message: `Generated ${numberOfQRs} QR codes`,
+      data: {
+        batchId,
         qrCodes,
         articleInfo: {
           articleId: article.articleId,
           articleName: article.articleName,
+          articleImage: article.articleImage,
           productId: article.productId,
           variantId: article.variantId,
           variantName: article.variantName,
+          segment: article.segment,
           colors: colorsArray,
           sizes: sizesArray,
           numberOfQRs
@@ -682,6 +687,7 @@ const generateQRCodes = async (req, res) => {
     });
 
   } catch (error) {
+    console.error('[QR-GEN] Error:', error);
     res.status(500).json({
       result: false,
       message: 'QR generation failed',
@@ -690,370 +696,370 @@ const generateQRCodes = async (req, res) => {
   }
 };
 
+
+
 const scanQRCode = async (req, res) => {
   try {
     const { uniqueId } = req.params;
-    const { scannedBy, location, event, notes, qualityCheck, distributorDetails, trackingNumber } = req.body;
-
-    console.log(`[SCAN] ========== Starting Scan Process ==========`);
-    console.log(`[SCAN] UniqueId: ${uniqueId}`);
-
-    if (!req.user || !req.user.id) {
-      return res.status(401).json({ result: false, message: "User authentication required for scanning" });
-    }
-
-    // ✅ Find QRCode
-    const qrCode = await QRCode.findOne({ uniqueId });
-    if (!qrCode) {
-      console.error(`[ERROR] QR code not found: ${uniqueId}`);
-      return res.status(404).json({ 
-        result: false, 
-        message: `QR code with uniqueId ${uniqueId} not found in database` 
-      });
-    }
-
-    console.log(`[SCAN] QR Code Data:`, {
-      uniqueId: qrCode.uniqueId,
-      status: qrCode.status,
-      articleName: qrCode.articleName,
-      contractorInput: {
-        articleName: qrCode.contractorInput?.articleName,
-        articleId: qrCode.contractorInput?.articleId,
-        colors: qrCode.contractorInput?.colors,
-        sizes: qrCode.contractorInput?.sizes,
-        cartonNumber: qrCode.contractorInput?.cartonNumber
-      }
-    });
-
-    // ✅ Extract articleId and articleName from contractorInput
-    const articleId = qrCode.contractorInput?.articleId;
-    const articleName = qrCode.contractorInput?.articleName || qrCode.articleName;
+    const { event, notes, qualityCheck, distributorDetails, trackingNumber } = req.body;
     
-    if (!articleId) {
-      console.error(`[ERROR] No articleId found in QR code: ${uniqueId}`);
-      return res.status(400).json({ 
-        result: false, 
-        message: "QR code does not have an articleId. This QR might be from an old batch. Please regenerate QR codes with article information." 
+    console.log('[SCAN] ========== Starting Scan ==========');
+    console.log('[SCAN] UniqueId:', uniqueId, ', Event:', event);
+    
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        result: false,
+        message: "User authentication required"
       });
     }
 
-    if (!articleName) {
-      console.error(`[ERROR] No article name found in QR code: ${uniqueId}`);
-      return res.status(400).json({ 
-        result: false, 
-        message: "QR code does not have an article name." 
+    // ✅ Find QR by uniqueId or MongoDB _id
+    let qrCode = await QRCode.findOne({ uniqueId });
+    
+    if (!qrCode && mongoose.Types.ObjectId.isValid(uniqueId)) {
+      qrCode = await QRCode.findById(uniqueId);
+    }
+
+    if (!qrCode) {
+      return res.status(404).json({
+        result: false,
+        message: `QR code not found: ${uniqueId}`
       });
     }
 
-    console.log(`[SCAN] ✅ Extracted - ArticleId: ${articleId}, ArticleName: ${articleName}`);
+    console.log('[SCAN] Found QR:', qrCode.uniqueId, ', Current Status:', qrCode.status);
 
-    // Update QR code's articleName if it's missing
-    if (!qrCode.articleName) {
-      qrCode.articleName = articleName;
-      console.log(`[SCAN] Updated QR code articleName to: ${articleName}`);
+    const articleId = qrCode.contractorInput?.articleId || 
+                     qrCode.productReference?.articleId?.toString() || null;
+    const articleName = qrCode.contractorInput?.articleName || 
+                       qrCode.articleName || null;
+
+    if (!articleId || !articleName) {
+      return res.status(400).json({
+        result: false,
+        message: "QR code missing article information"
+      });
     }
 
-    const allowedEvents = new Set(["received", "shipped"]);
+    const allowedEvents = new Set(['received', 'shipped']);
     if (!allowedEvents.has(event)) {
-      return res.status(400).json({ 
-        result: false, 
-        message: "Invalid event. Only 'received' and 'shipped' are allowed" 
+      return res.status(400).json({
+        result: false,
+        message: "Invalid event. Only 'received' and 'shipped' allowed"
       });
     }
 
+    // ✅ FIXED: Get product info (including article image)
     const productId = qrCode.productReference?.productId;
+    let segment = 'Unknown';
+    let variantName = 'Unknown';
+    let articleImage = null;
 
-    // ✅ EVENT: RECEIVED - Warehouse receipt scan
-    if (event === "received") {
-      console.log(`[RECEIVED] Processing receive scan for ArticleId: ${articleId}`);
+    if (productId && articleId) {
+      try {
+        const objectId = mongoose.Types.ObjectId.isValid(articleId) 
+          ? new mongoose.Types.ObjectId(articleId) 
+          : articleId;
 
-      // Check if this specific QR was already received
-      if (qrCode.status === "received") {
-        console.log(`[ERROR] QR already received: ${uniqueId}`);
-        return res.status(400).json({ 
-          result: false, 
-          message: "This carton has already been received at warehouse" 
+        const productData = await Product.aggregate([
+          { $match: { _id: productId } },
+          { $unwind: '$variants' },
+          { $unwind: '$variants.articles' },
+          { $match: { 'variants.articles._id': objectId } },
+          {
+            $project: {
+              segment: '$segment',
+              variantName: '$variants.name',
+              articleImage: '$variants.articles.image'  // ✅ Get article image
+            }
+          },
+          { $limit: 1 }
+        ]);
+
+        if (productData && productData.length > 0) {
+          segment = productData[0].segment || 'Unknown';
+          variantName = productData[0].variantName || 'Unknown';
+          articleImage = productData[0].articleImage || null;  // ✅ Store article image
+          
+          console.log('[SCAN] Article Image:', articleImage);
+        }
+      } catch (err) {
+        console.error('[SCAN] Product lookup error:', err);
+      }
+    }
+
+    // ========== EVENT: RECEIVED (Warehouse Scan) ==========
+    if (event === 'received') {
+      console.log('[RECEIVED] Processing warehouse scan');
+
+      if (qrCode.status === 'received') {
+        return res.status(400).json({
+          result: false,
+          message: "This QR has already been received"
         });
       }
 
-      // ✅ Find or create article-based inventory using articleId
-      let inventory = await Inventory.findOne({ articleId });
+      // Find or create inventory
+      let inventory = await Inventory.findOne({ articleId: articleId.toString() });
 
       if (!inventory) {
-        console.log(`[INVENTORY] Creating NEW inventory for ArticleId: ${articleId}, Name: ${articleName}`);
+        console.log('[INVENTORY] Creating new inventory for:', articleName);
         
         inventory = new Inventory({
-          articleId, // ✅ PRIMARY KEY
+          articleId: articleId.toString(),
           articleName,
-          productId: productId || null,
-          variantId: qrCode.productReference?.variantId || null,
-          segment: qrCode.productReference?.segment || "Unknown",
-          variantName: qrCode.productReference?.variantName || "Unknown",
-          items: [],
-          quantityByStage: { received: 0, shipped: 0 },
-          availableQuantity: 0
+          segment,
+          articleImage,
+          receivedQuantity: 0,
+          shippedQuantity: 0,
+          availableQuantity: 0,
+          qrCodes: []
         });
-
-        // Save the new inventory first
-        try {
-          await inventory.save();
-          console.log(`[INVENTORY] ✅ New inventory created successfully for ArticleId: ${articleId}`);
-        } catch (saveError) {
-          console.error(`[ERROR] Failed to create inventory:`, saveError);
-          
-          // Check if it's a duplicate key error
-          if (saveError.code === 11000) {
-            console.log(`[INVENTORY] Concurrent creation detected, fetching existing inventory`);
-            inventory = await Inventory.findOne({ articleId });
-            
-            if (!inventory) {
-              return res.status(500).json({
-                result: false,
-                message: `Failed to create or find inventory for articleId: ${articleId}`
-              });
-            }
-          } else {
-            return res.status(500).json({
-              result: false,
-              message: `Failed to create inventory for article: ${articleName}`,
-              error: saveError.message
-            });
-          }
-        }
-      } else {
-        console.log(`[INVENTORY] ✅ Found existing inventory for ArticleId: ${articleId}, Name: ${articleName}`);
       }
 
-      // Check if this QR already exists in this article's inventory
-      const existingItem = inventory.items.find(item => item.uniqueId === uniqueId);
-      if (existingItem) {
-        if (existingItem.status === "received") {
-          console.log(`[ERROR] Item already in inventory: ${uniqueId}`);
-          return res.status(400).json({ 
-            result: false, 
-            message: "This carton has already been received in inventory" 
-          });
-        }
-      }
-
-      // Add scan record to QR code
-      const scanRecord = {
+      // Add scan record to QR
+      qrCode.scans.push({
         scannedAt: new Date(),
         scannedBy: req.user.id,
         event,
-        notes: notes || "",
-        location: location || "Main Warehouse",
-        qualityCheck: qualityCheck || { passed: true, notes: "" }
-      };
+        notes: notes || '',
+        location: 'Main Warehouse',
+        qualityCheck: qualityCheck || { passed: true }
+      });
 
-      qrCode.scans.push(scanRecord);
       qrCode.totalScans = (qrCode.totalScans || 0) + 1;
-
-      if (!qrCode.firstScannedAt) {
-        qrCode.firstScannedAt = new Date();
-      }
+      if (!qrCode.firstScannedAt) qrCode.firstScannedAt = new Date();
       qrCode.lastScannedAt = new Date();
-      qrCode.status = "received";
+      qrCode.status = 'received';
 
       qrCode.warehouseDetails = {
         receivedAt: new Date(),
         receivedBy: {
           userId: req.user.id,
-          userType: "warehouseinspector",
-          name: req.user.name || "Warehouse Inspector"
+          userType: 'warehouse_inspector',
+          name: req.user.name || 'Warehouse Inspector'
         },
-        conditionOnReceipt: qualityCheck?.passed ? "good" : "damaged",
-        location: location || "Main Warehouse",
-        notes: notes || ""
+        conditionOnReceipt: qualityCheck?.passed ? 'good' : 'damaged',
+        location: 'Main Warehouse',
+        notes: notes || ''
       };
 
-      // Save QR code
-      try {
-        await qrCode.save();
-        console.log(`[QRCODE] ✅ QR code ${uniqueId} saved with 'received' status`);
-      } catch (qrSaveError) {
-        console.error(`[ERROR] Failed to save QR code:`, qrSaveError);
-        return res.status(500).json({
-          result: false,
-          message: "Failed to update QR code status",
-          error: qrSaveError.message
-        });
-      }
+      await qrCode.save();
+      console.log('[QRCODE] Saved with "received" status');
 
-      // ✅ Sync with article-specific inventory
-      try {
-        await inventory.syncWithQRCode(qrCode._id);
-        console.log(`[INVENTORY] ✅ Synced successfully`);
-        console.log(`[INVENTORY] ArticleId: ${articleId}, Name: ${articleName}`);
-        console.log(`[INVENTORY] Received: ${inventory.quantityByStage.received}, Shipped: ${inventory.quantityByStage.shipped}, Available: ${inventory.availableQuantity}`);
-      } catch (syncError) {
-        console.error(`[ERROR] Failed to sync inventory:`, syncError);
-        return res.status(500).json({
-          result: false,
-          message: "Failed to sync inventory",
-          error: syncError.message
-        });
-      }
-
-      console.log(`[SUCCESS] ========== Scan Completed Successfully ==========`);
-
+      // ✅ Sync inventory (ONE QR = ONE UNIT)
+      await inventory.syncWithQRCode(qrCode._id);
+      
+      console.log('[SUCCESS] ✅ Warehouse scan completed');
+      
       return res.status(200).json({
         result: true,
-        message: "Warehouse receipt scan completed successfully",
+        message: "Warehouse receipt scan completed",
         data: {
           qrCode: {
             uniqueId: qrCode.uniqueId,
             articleName: qrCode.articleName,
-            articleId: articleId,
-            status: qrCode.status,
-            currentStage: "inwarehouse",
-            nextStage: "shipment"
+            status: qrCode.status
           },
           inventory: {
             articleId: inventory.articleId,
             articleName: inventory.articleName,
-            received: inventory.quantityByStage.received,
-            shipped: inventory.quantityByStage.shipped,
+            receivedQuantity: inventory.receivedQuantity,
             availableQuantity: inventory.availableQuantity
-          },
-          scanDetails: scanRecord
+          }
         }
       });
     }
 
-    // ✅ EVENT: SHIPPED - Shipment scan
-    if (event === "shipped") {
-      console.log(`[SHIPPED] Processing ship scan for ArticleId: ${articleId}`);
+    // ========== EVENT: SHIPPED (Shipment Scan) ==========
+    if (event === 'shipped') {
+      console.log('[SHIPPED] Processing shipment scan');
 
-      if (!productId) {
-        return res.status(400).json({ 
-          result: false, 
-          message: "QR code is not linked to any product. Please match it first." 
-        });
-      }
-
-      // ✅ Find article-specific inventory by articleId
-      const inventory = await Inventory.findOne({ articleId });
-
-      if (!inventory) {
-        console.error(`[ERROR] No inventory found for ArticleId: ${articleId}`);
-        return res.status(400).json({ 
-          result: false, 
-          message: `Cannot ship - no inventory found for article: ${articleName} (ID: ${articleId}). Please receive this article first.` 
-        });
-      }
-
-      const inventoryItem = inventory.items.find(item => item.uniqueId === uniqueId);
-
-      if (!inventoryItem) {
-        console.error(`[ERROR] Item not in inventory: ${uniqueId}`);
+      if (qrCode.status === 'shipped') {
         return res.status(400).json({
           result: false,
-          message: "Cannot ship a carton that hasn't been received at warehouse yet. Item not found in inventory."
+          message: "This QR has already been shipped"
         });
       }
 
-      if (inventoryItem.status !== "received") {
+      if (qrCode.status !== 'received') {
         return res.status(400).json({
           result: false,
-          message: `Cannot ship this carton. Current status: ${inventoryItem.status}. Must be 'received' first.`
+          message: "QR must be received at warehouse before shipping"
         });
       }
 
-      if (qrCode.status !== "received") {
+      if (!distributorDetails || !distributorDetails.distributorId) {
         return res.status(400).json({
           result: false,
-          message: `Cannot ship this carton. QR code status is '${qrCode.status}'. Must be 'received' first.`
+          message: "Distributor details required"
         });
       }
 
-      if (!distributorDetails?.distributorId || !distributorDetails?.distributorName) {
-        return res.status(400).json({
+      // ✅ GET FULL DISTRIBUTOR DETAILS FROM DATABASE
+      const distributor = await userModel.findById(distributorDetails.distributorId);
+      
+      if (!distributor) {
+        return res.status(404).json({
           result: false,
-          message: "Distributor details are required for shipment"
+          message: "Distributor not found"
         });
       }
 
-      // Add scan record
-      const scanRecord = {
+      // ✅ CRITICAL FIX: Save QR first BEFORE creating shipment
+      // This prevents double inventory sync
+      qrCode.scans.push({
         scannedAt: new Date(),
         scannedBy: req.user.id,
         event,
-        notes: notes || "",
-        location: location || "Shipping Bay",
-        qualityCheck: qualityCheck || { passed: true, notes: "" }
-      };
+        notes: notes || '',
+        location: 'Shipping Dock',
+        distributorId: distributorDetails.distributorId
+      });
 
-      qrCode.scans.push(scanRecord);
       qrCode.totalScans = (qrCode.totalScans || 0) + 1;
       qrCode.lastScannedAt = new Date();
-      qrCode.status = "shipped";
+      qrCode.status = 'shipped';  // ✅ CHANGE STATUS FIRST
 
+      // ✅ Save QR code BEFORE inventory sync
+      await qrCode.save();
+      console.log('[QRCODE] ✅ Status changed to "shipped" BEFORE shipment creation');
+
+      // ✅ FIND OR CREATE SHIPMENT
+      let shipment = await Shipment.findOne({
+        distributorId: distributor._id,
+        status: { $in: ['pending', 'in_transit'] }
+      });
+
+      const shipmentItemData = {
+        qrCodeId: qrCode._id,
+        uniqueId: qrCode.uniqueId,
+        articleName: qrCode.articleName || articleName,
+        articleImage: articleImage,  // ✅ FIXED: Include article image
+        articleDetails: {
+          colors: qrCode.contractorInput?.colors || [],
+          sizes: qrCode.contractorInput?.sizes || [],
+          cartonNumber: qrCode.contractorInput?.cartonNumber || 0,
+          totalCartons: qrCode.contractorInput?.totalCartons || 0
+        },
+        productReference: {
+          productId: productId,
+          variantId: qrCode.productReference?.variantId,
+          articleId: articleId,
+          segment: segment,
+          variantName: variantName
+        },
+        scannedAt: new Date()
+      };
+
+      if (!shipment) {
+        // ✅ CREATE NEW SHIPMENT with all required fields from schema
+        const shipmentId = `SHIP_${Date.now()}_${distributor._id.toString().slice(-6)}`;
+        
+        shipment = new Shipment({
+          shipmentId: shipmentId,
+          
+          // Distributor details
+          distributorId: distributor._id,
+          distributorName: distributor.distributorDetails?.partyName || distributor.name,
+          distributorPhoneNo: distributor.phoneNo,
+          distributorCity: distributor.distributorDetails?.cityName || distributor.distributorDetails?.city,
+          distributorTransport: distributor.distributorDetails?.transport,
+          distributorPartyName: distributor.distributorDetails?.partyName,
+          
+          // Items array
+          items: [shipmentItemData],
+          
+          // Shipment manager details
+          shippedBy: {
+            userId: req.user.id,
+            userType: 'shipment_manager',
+            name: req.user.name || 'Shipment Manager',
+            phoneNo: req.user.phoneNo
+          },
+          
+          shippedAt: new Date(),
+          totalCartons: 1,
+          status: 'in_transit',
+          trackingNumber: trackingNumber || `TRACK_${Date.now()}`,
+          notes: notes || `Shipment to ${distributor.distributorDetails?.partyName || distributor.name}`
+        });
+
+        console.log('[SHIPMENT] Creating new shipment:', shipment.shipmentId);
+      } else {
+        // ✅ ADD TO EXISTING SHIPMENT
+        shipment.items.push(shipmentItemData);
+        shipment.totalCartons = shipment.items.length;
+        shipment.notes = `${shipment.notes || ''} | Added ${articleName}`.trim();
+        
+        console.log('[SHIPMENT] Adding to existing shipment:', shipment.shipmentId);
+      }
+
+      await shipment.save();
+      console.log('[SHIPMENT] ✅ Shipment saved');
+
+      // ✅ UPDATE QR CODE WITH SHIPMENT DETAILS (after shipment is saved)
       qrCode.shipmentDetails = {
         shippedAt: new Date(),
         shippedBy: {
           userId: req.user.id,
-          userType: "shipmentmanager",
-          name: req.user.name || "Shipment Manager"
+          userType: 'shipment_manager',
+          name: req.user.name || 'Shipment Manager'
         },
-        distributorId: distributorDetails.distributorId,
-        distributorName: distributorDetails.distributorName,
-        trackingNumber: trackingNumber || `TRACK${Date.now()}`,
-        notes: notes || ""
+        distributorId: distributor._id,
+        distributorName: distributor.distributorDetails?.partyName || distributor.name,
+        shipmentId: shipment._id,
+        trackingNumber: shipment.trackingNumber,
+        notes: notes || ''
       };
 
-      try {
-        await qrCode.save();
-        console.log(`[QRCODE] ✅ QR code ${uniqueId} saved with 'shipped' status`);
-        
+      await qrCode.save();
+      console.log('[QRCODE] ✅ Shipment details added to QR code');
+
+      // ✅ CRITICAL FIX: Only sync inventory ONCE after everything is complete
+      const inventory = await Inventory.findOne({ articleId: articleId.toString() });
+      
+      if (inventory) {
+        // Since QR status is already "shipped", syncWithQRCode will correctly move it
         await inventory.syncWithQRCode(qrCode._id);
-        console.log(`[INVENTORY] ✅ Synced successfully. ArticleId: ${articleId}, Shipped: ${inventory.quantityByStage.shipped}, Available: ${inventory.availableQuantity}`);
-
-        console.log(`[SUCCESS] ========== Shipment Completed Successfully ==========`);
-
-        return res.status(200).json({
-          result: true,
-          message: "Shipment scan completed successfully",
-          data: {
-            qrCode: {
-              uniqueId: qrCode.uniqueId,
-              articleName: qrCode.articleName,
-              articleId: articleId,
-              status: qrCode.status,
-              currentStage: "shipped",
-              nextStage: "delivered"
-            },
-            inventory: {
-              articleId: inventory.articleId,
-              articleName: inventory.articleName,
-              received: inventory.quantityByStage.received,
-              shipped: inventory.quantityByStage.shipped,
-              availableQuantity: inventory.availableQuantity
-            },
-            scanDetails: scanRecord
-          }
-        });
-      } catch (shipmentError) {
-        console.error(`[ERROR] Shipment processing failed:`, shipmentError);
-        return res.status(500).json({
-          result: false,
-          message: "Failed to process shipment",
-          error: shipmentError.message
-        });
+        console.log('[INVENTORY] ✅ Synced (deducted 1 from available)');
       }
+
+      console.log('[SUCCESS] ✅ Shipment scan completed');
+
+      return res.status(200).json({
+        result: true,
+        message: "Shipment scan completed",
+        data: {
+          qrCode: {
+            uniqueId: qrCode.uniqueId,
+            articleName: qrCode.articleName,
+            status: qrCode.status,
+            articleDetails: {
+              colors: qrCode.contractorInput?.colors || [],
+              sizes: qrCode.contractorInput?.sizes || []
+            }
+          },
+          shipment: {
+            shipmentId: shipment.shipmentId,
+            distributorName: distributor.distributorDetails?.partyName || distributor.name,
+            trackingNumber: shipment.trackingNumber,
+            totalCartons: shipment.totalCartons,
+            shippedAt: shipment.shippedAt
+          }
+        }
+      });
     }
 
   } catch (error) {
-    console.error("[ERROR] ========== QR Scan Error ==========");
-    console.error(error);
+    console.error('[SCAN] ❌ Error:', error);
     res.status(500).json({
       result: false,
-      message: "Failed to process QR code scan",
+      message: "Scan failed",
       error: error.message
     });
   }
 };
-
 
 
 const downloadQRCodes = async (req, res) => {
@@ -1290,34 +1296,22 @@ const getInventoryStats = async (req, res) => {
   }
 };
 
-// Generate PDF receipt using PDFKit
-// Add this route handler for PDF receipt generation
 const generateShipmentReceipt = async (req, res) => {
   try {
-    const { shipmentId } = req.params;
-    
-    // Fetch actual shipment data
-    const shipment = await Shipment.findOne({ shipmentId })
-      .populate('distributorId', 'distributorDetails phoneNo')
-      .populate('shippedBy', 'name')
-      .populate({
-        path: 'items.qrCodeId',
-        select: 'contractorInput articleName'
-      });
+    const { shipmentId, distributorName, distributorPhoneNo, totalCartons, shippedAt, items } = req.body;
 
-    if (!shipment) {
-      return res.status(404).json({
+    console.log('[PDF] Generating receipt for:', shipmentId);
+    console.log('[PDF] Received items:', JSON.stringify(items, null, 2));
+
+    if (!shipmentId || !items || items.length === 0) {
+      return res.status(400).json({
         result: false,
-        message: 'Shipment not found'
+        message: 'Shipment ID and items are required'
       });
     }
 
-    // Create PDF document
     const PDFDocument = require('pdfkit');
-    const doc = new PDFDocument({ 
-      size: 'A4',
-      margin: 50 
-    });
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
 
     // Set response headers for PDF download
     res.setHeader('Content-Type', 'application/pdf');
@@ -1327,116 +1321,150 @@ const generateShipmentReceipt = async (req, res) => {
     doc.pipe(res);
 
     // Header Section
-    doc.fontSize(24)
-       .fillColor('#2563eb')
-       .text('SHIPMENT RECEIPT', 50, 50, { align: 'center' });
-
-    doc.fontSize(12)
-       .fillColor('#666666')
-       .text('Official Shipping Documentation', 50, 80, { align: 'center' });
+    doc.fontSize(24).fillColor('#2563eb').text('SHIPMENT RECEIPT', 50, 50, { align: 'center' });
+    doc.fontSize(12).fillColor('#666666').text('Official Shipping Documentation', 50, 80, { align: 'center' });
 
     // Draw header line
-    doc.strokeColor('#2563eb')
-       .lineWidth(3)
-       .moveTo(50, 100)
-       .lineTo(545, 100)
-       .stroke();
+    doc.strokeColor('#2563eb').lineWidth(3).moveTo(50, 100).lineTo(545, 100).stroke();
 
     // Company Info Section
-    doc.fontSize(16)
-       .fillColor('#1f2937')
-       .text('Pinkey Footwear', 50, 130);
-
-    doc.fontSize(10)
-       .fillColor('#666666')
-       .text('Address: Main Warehouse Facility', 50, 150)
-       .text('Phone: +91 XXXXX XXXXX', 50, 165)
+    doc.fontSize(16).fillColor('#1f2937').text('Pinkey Footwear', 50, 130);
+    doc.fontSize(10).fillColor('#666666')
+      .text('Address: Main Warehouse Facility', 50, 150)
+      .text('Phone: +91 XXXXX XXXXX', 50, 165);
 
     // Shipment Details Box
-    doc.rect(50, 220, 245, 120)
-       .fillAndStroke('#f9fafb', '#e5e7eb');
-
-    doc.fontSize(14)
-       .fillColor('#1f2937')
-       .text('Shipment Details', 60, 235);
-
-    doc.fontSize(10)
-       .fillColor('#4b5563')
-       .text(`Shipment ID: ${shipment.shipmentId}`, 60, 255)
-       .text(`Date: ${new Date(shipment.shippedAt).toLocaleDateString()}`, 60, 270)
-       .text(`Time: ${new Date(shipment.shippedAt).toLocaleTimeString()}`, 60, 285)
-       .text(`Status: ${shipment.status.toUpperCase()}`, 60, 300)
-       .text(`Total Cartons: ${shipment.totalCartons}`, 60, 315);
+    doc.rect(50, 220, 245, 120).fillAndStroke('#f9fafb', '#e5e7eb');
+    doc.fontSize(14).fillColor('#1f2937').text('Shipment Details', 60, 235);
+    doc.fontSize(10).fillColor('#4b5563')
+      .text(`Shipment ID: ${shipmentId}`, 60, 255)
+      .text(`Date: ${new Date(shippedAt).toLocaleDateString()}`, 60, 270)
+      .text(`Time: ${new Date(shippedAt).toLocaleTimeString()}`, 60, 285)
+      .text(`Status: IN_TRANSIT`, 60, 300)
+      .text(`Total Cartons: ${totalCartons}`, 60, 315);
 
     // Distributor Details Box
-    doc.rect(300, 220, 245, 120)
-       .fillAndStroke('#f9fafb', '#e5e7eb');
-
-    doc.fontSize(14)
-       .fillColor('#1f2937')
-       .text('Distributor Information', 310, 235);
-
-    const distributor = shipment.distributorId;
-    doc.fontSize(10)
-       .fillColor('#4b5563')
-       .text(`Company: ${shipment.distributorName}`, 310, 255)
-       .text(`Contact: ${distributor?.phoneNo || 'N/A'}`, 310, 270)
-       .text(`Party: ${distributor?.distributorDetails?.partyName || 'N/A'}`, 310, 285)
-       .text(`Transport: ${distributor?.distributorDetails?.transport || 'N/A'}`, 310, 300);
+    doc.rect(300, 220, 245, 120).fillAndStroke('#f9fafb', '#e5e7eb');
+    doc.fontSize(14).fillColor('#1f2937').text('Distributor Information', 310, 235);
+    doc.fontSize(10).fillColor('#4b5563')
+      .text(`Company: ${distributorName || 'N/A'}`, 310, 255)
+      .text(`Contact: ${distributorPhoneNo || 'N/A'}`, 310, 270);
 
     // Items Table Header
-    doc.fontSize(16)
-       .fillColor('#1f2937')
-       .text('Shipped Items', 50, 370);
+    doc.fontSize(16).fillColor('#1f2937').text('Shipped Items', 50, 370);
 
     // Table Header Background
-    doc.rect(50, 400, 495, 25)
-       .fillAndStroke('#2563eb', '#2563eb');
+    doc.rect(50, 400, 495, 25).fillAndStroke('#2563eb', '#2563eb');
+    doc.fontSize(9).fillColor('white')
+      .text('#', 60, 410, { width: 25 })
+      .text('Article', 90, 410, { width: 95 })
+      .text('Colors', 190, 410, { width: 100 })
+      .text('Sizes', 295, 410, { width: 75 })
+      .text('Carton', 375, 410, { width: 50 })
+      .text('Unique ID', 430, 410, { width: 115 });
 
-    doc.fontSize(10)
-       .fillColor('white')
-       .text('#', 60, 410, { width: 30 })
-       .text('Article Name', 100, 410, { width: 140 })
-       .text('Colors', 250, 410, { width: 80 })
-       .text('Sizes', 340, 410, { width: 60 })
-       .text('Status', 410, 410, { width: 60 })
-       .text('Unique ID', 480, 410, { width: 65 });
-
-    // Table Rows
+    // ✅ FIXED: Table Rows - Extract from items array
     let yPosition = 430;
-    shipment.items.forEach((item, index) => {
+    items.forEach((item, index) => {
       // Alternate row colors
       if (index % 2 === 0) {
-        doc.rect(50, yPosition - 5, 495, 20)
-           .fillAndStroke('#f9fafb', '#f9fafb');
+        doc.rect(50, yPosition - 5, 495, 22).fillAndStroke('#f9fafb', '#f9fafb');
       }
 
-      doc.fillColor('#1f2937')
-         .text((index + 1).toString(), 60, yPosition, { width: 30 })
-         .text(item.articleName || 'Unknown', 100, yPosition, { width: 140 })
-         .text(Array.isArray(item.articleDetails?.colors) ? 
-               item.articleDetails.colors.join(', ') : 
-               item.articleDetails?.colors || 'N/A', 250, yPosition, { width: 80 })
-         .text(Array.isArray(item.articleDetails?.sizes) ? 
-               item.articleDetails.sizes.join(', ') : 
-               item.articleDetails?.sizes || 'N/A', 340, yPosition, { width: 60 })
-         .text('SHIPPED', 410, yPosition, { width: 60 })
-         .text(item.uniqueId.substring(0, 8) + '...', 480, yPosition, { width: 65 });
+      // ✅ Extract article details from the item (sent from frontend)
+      console.log(`[PDF] Processing item ${index + 1}:`, item);
 
-      yPosition += 20;
+      const articleName = item.articleName || 'Unknown';
+      
+      // ✅ Colors - check multiple sources
+      let colors = 'N/A';
+      if (item.colors && Array.isArray(item.colors)) {
+        colors = item.colors.join(', ');
+      } else if (item.colors && typeof item.colors === 'string') {
+        colors = item.colors;
+      } else if (item.articleDetails?.colors) {
+        colors = Array.isArray(item.articleDetails.colors) 
+          ? item.articleDetails.colors.join(', ') 
+          : item.articleDetails.colors;
+      }
+
+      // ✅ Sizes - check multiple sources and format
+      let sizes = 'N/A';
+      if (item.sizesFormatted) {
+        sizes = item.sizesFormatted;
+      } else if (item.sizes && Array.isArray(item.sizes) && item.sizes.length > 0) {
+        if (item.sizes.length === 1) {
+          sizes = item.sizes[0].toString();
+        } else {
+          const sorted = [...item.sizes].sort((a, b) => a - b);
+          sizes = `${sorted[0]}X${sorted[sorted.length - 1]}`;
+        }
+      } else if (item.articleDetails?.sizes && Array.isArray(item.articleDetails.sizes)) {
+        if (item.articleDetails.sizes.length > 0) {
+          if (item.articleDetails.sizes.length === 1) {
+            sizes = item.articleDetails.sizes[0].toString();
+          } else {
+            const sorted = [...item.articleDetails.sizes].sort((a, b) => a - b);
+            sizes = `${sorted[0]}X${sorted[sorted.length - 1]}`;
+          }
+        }
+      }
+
+      // ✅ Carton number
+      const cartonNum = item.cartonNumber || 
+                       item.articleDetails?.cartonNumber || 
+                       (index + 1);
+
+      // ✅ Unique ID
+      const uniqueId = item.uniqueId || 'N/A';
+      const shortUniqueId = uniqueId.length > 12 ? uniqueId.substring(0, 12) + '...' : uniqueId;
+
+      console.log(`[PDF] Item ${index + 1} - Article: ${articleName}, Colors: ${colors}, Sizes: ${sizes}, Carton: ${cartonNum}`);
+
+      // Draw row
+      doc.fillColor('#1f2937').fontSize(9)
+        .text((index + 1).toString(), 60, yPosition, { width: 25 })
+        .text(articleName, 90, yPosition, { width: 95, ellipsis: true })
+        .text(colors, 190, yPosition, { width: 100, ellipsis: true })
+        .text(sizes, 295, yPosition, { width: 75 })
+        .text(cartonNum.toString(), 375, yPosition, { width: 50 })
+        .text(shortUniqueId, 430, yPosition, { width: 115, ellipsis: true });
+
+      yPosition += 22;
+
+      // ✅ Add new page if needed
+      if (yPosition > 700 && index < items.length - 1) {
+        doc.addPage();
+        yPosition = 50;
+        
+        // Re-add table header on new page
+        doc.rect(50, yPosition, 495, 25).fillAndStroke('#2563eb', '#2563eb');
+        doc.fontSize(9).fillColor('white')
+          .text('#', 60, yPosition + 10, { width: 25 })
+          .text('Article', 90, yPosition + 10, { width: 95 })
+          .text('Colors', 190, yPosition + 10, { width: 100 })
+          .text('Sizes', 295, yPosition + 10, { width: 75 })
+          .text('Carton', 375, yPosition + 10, { width: 50 })
+          .text('Unique ID', 430, yPosition + 10, { width: 115 });
+        
+        yPosition += 30;
+      }
     });
 
     // Footer
-    const footerY = summaryY + 100;
-    doc.fontSize(10)
-       .fillColor('#6b7280')
-       .text(`Receipt generated on ${new Date().toLocaleString()}`, 50, footerY + 35, { align: 'center' })
-       .text('This is a computer-generated document.', 50, footerY + 50, { align: 'center', style: 'italic' });
+    const footerY = Math.min(yPosition + 50, 720);
+    doc.fontSize(10).fillColor('#6b7280')
+      .text(`Receipt generated on ${new Date().toLocaleString()}`, 50, footerY, { align: 'center' })
+      .text('This is a computer-generated document.', 50, footerY + 15, { align: 'center', oblique: true });
 
     // Finalize the PDF
     doc.end();
 
+    console.log('[PDF] ✅ Receipt generated successfully');
+
   } catch (error) {
+    console.error('[PDF] ❌ Generation failed:', error);
+    
     // If response headers haven't been sent yet, send JSON error
     if (!res.headersSent) {
       res.status(500).json({
@@ -1632,121 +1660,85 @@ const getSingleProductInventory = async (req, res) => {
 };
 
 const getAllInventory = async (req, res) => {
-  try {
-    const { limit = 50, offset = 0, sortBy = "lastUpdated" } = req.query;
+    try {
+        // Fetch all inventory with populated product details
+        const inventoryRecords = await Inventory.find({})
+            .populate('productId', 'segment')
+            .sort({ updatedAt: -1 });
 
-    const allowedSortFields = ["lastUpdated", "availableQuantity", "createdAt", "articleName"];
-    const validSortBy = allowedSortFields.includes(sortBy) ? sortBy : "lastUpdated";
-
-    // Get all article-based inventories
-    const inventories = await Inventory.find()
-      .populate("productId", "segment variants")
-      .populate({
-        path: "items.qrCodeId",
-        select: "status totalScans batchId createdAt"
-      })
-      .sort({ [validSortBy]: -1 })
-      .limit(parseInt(limit))
-      .skip(parseInt(offset))
-      .lean();
-
-    if (!inventories || inventories.length === 0) {
-      return res.status(200).json({
-        result: true,
-        message: "No inventory data found",
-        data: {
-          overallStats: {
-            totalArticles: 0,
-            totalQRsScanned: 0,
-            totalReceived: 0,
-            totalShipped: 0,
-            totalAvailable: 0
-          },
-          inventoryData: []
-        },
-        pagination: {
-          limit: parseInt(limit),
-          offset: parseInt(offset),
-          hasMore: false
+        if (!inventoryRecords || inventoryRecords.length === 0) {
+            return res.status(statusCodes.success).send({
+                result: true,
+                message: "No inventory data found",
+                data: {
+                    inventoryData: [],
+                    totalProducts: 0
+                }
+            });
         }
-      });
+
+        // ✅ SIMPLE: Each record becomes one row
+        const formattedInventory = inventoryRecords.map(record => {
+            const receivedCount = record.items.filter(item => item.status === 'received').length;
+            const shippedCount = record.items.filter(item => item.status === 'shipped').length;
+            const totalQRs = record.items.length;
+
+            return {
+                productId: record.productId?._id || record.productId,
+                
+                productInfo: {
+                    segment: record.segment || record.productId?.segment || 'Unknown',
+                    totalVariants: 1,
+                    totalArticles: 1
+                },
+                
+                articleBreakdown: {
+                    [record.articleName || 'Unknown']: {
+                        qrsGenerated: totalQRs,
+                        qrsScanned: receivedCount + shippedCount,
+                        lastActivity: record.updatedAt || record.createdAt
+                    }
+                },
+                
+                inventoryMetrics: {
+                    availableQuantity: record.availableQuantity || 0,
+                    quantityByStage: {
+                        received: record.items.filter(i => i.status === 'received')
+                            .reduce((sum, item) => sum + (item.numberOfCartons || 0), 0),
+                        shipped: record.items.filter(i => i.status === 'shipped')
+                            .reduce((sum, item) => sum + (item.numberOfCartons || 0), 0),
+                        pending: record.items.filter(i => i.status === 'pending')
+                            .reduce((sum, item) => sum + (item.numberOfCartons || 0), 0)
+                    }
+                },
+                
+                qrCodeStats: {
+                    totalQRs: totalQRs,
+                    scannedQRs: receivedCount + shippedCount,
+                    pendingQRs: totalQRs - (receivedCount + shippedCount)
+                },
+                
+                lastUpdated: record.updatedAt || record.createdAt
+            };
+        });
+
+        return res.status(statusCodes.success).send({
+            result: true,
+            message: "Inventory data retrieved successfully",
+            data: {
+                inventoryData: formattedInventory,
+                totalProducts: formattedInventory.length
+            }
+        });
+
+    } catch (error) {
+        console.error("Error fetching inventory:", error);
+        return res.status(statusCodes.serverError).send({
+            result: false,
+            message: "Error fetching inventory data",
+            error: error.message
+        });
     }
-
-    const inventoryData = inventories.map(inventory => {
-      if (!inventory || !inventory.items) return null;
-
-      const qrStats = inventory.items.reduce((acc, item) => {
-        if (item && item.qrCodeId) {
-          acc.totalQRs++;
-          acc.totalScans += (item.qrCodeId.totalScans || 0);
-          if (item.qrCodeId.totalScans > 0) {
-            acc.scannedQRs++;
-          }
-        }
-        return acc;
-      }, { totalQRs: 0, totalScans: 0, scannedQRs: 0 });
-
-      const statusBreakdown = inventory.items.reduce((acc, item) => {
-        if (item && item.status) {
-          acc[item.status] = (acc[item.status] || 0) + 1;
-        }
-        return acc;
-      }, {});
-
-      return {
-        articleId: inventory.articleId, // ✅ Return articleId
-        articleName: inventory.articleName,
-        productId: inventory.productId?._id || null,
-        productInfo: {
-          segment: inventory.segment || "Unknown",
-          variantName: inventory.variantName || "Unknown"
-        },
-        inventoryMetrics: {
-          totalQRsScanned: inventory.items.length,
-          availableQuantity: inventory.availableQuantity,
-          quantityByStage: inventory.quantityByStage || { received: 0, shipped: 0 }
-        },
-        qrCodeStats: qrStats,
-        statusBreakdown,
-        lastUpdated: inventory.lastUpdated || null
-      };
-    }).filter(Boolean);
-
-    const overallStats = inventoryData.reduce((acc, data) => ({
-      totalArticles: acc.totalArticles + 1,
-      totalQRsScanned: acc.totalQRsScanned + (data.inventoryMetrics?.totalQRsScanned || 0),
-      totalReceived: acc.totalReceived + (data.inventoryMetrics?.quantityByStage?.received || 0),
-      totalShipped: acc.totalShipped + (data.inventoryMetrics?.quantityByStage?.shipped || 0),
-      totalAvailable: acc.totalAvailable + (data.inventoryMetrics?.availableQuantity || 0)
-    }), {
-      totalArticles: 0,
-      totalQRsScanned: 0,
-      totalReceived: 0,
-      totalShipped: 0,
-      totalAvailable: 0
-    });
-
-    return res.status(200).json({
-      result: true,
-      message: "All inventory data retrieved successfully",
-      data: {
-        overallStats,
-        inventoryData
-      },
-      pagination: {
-        limit: parseInt(limit),
-        offset: parseInt(offset),
-        hasMore: inventories.length === parseInt(limit)
-      }
-    });
-  } catch (error) {
-    console.error("Error in getAllInventory:", error);
-    res.status(500).json({
-      result: false,
-      message: "Failed to get all inventory data",
-      error: error.message
-    });
-  }
 };
 
 const getQRStatistics = async (req, res) => {
@@ -3157,6 +3149,160 @@ const getUserDetails = async (req, res) => {
   }
 };
 
+
+// Add this controller for past orders with auto-cleanup
+// Add this to your warehouse controller
+const getQRCodeById = async (req, res) => {
+  try {
+    const { qrId } = req.params;
+
+    console.log(`[GET_QR] Fetching QR code by ID: ${qrId}`);
+
+    // Find QR code by MongoDB _id
+    const qrCode = await QRCode.findById(qrId);
+
+    if (!qrCode) {
+      return res.status(404).json({
+        result: false,
+        message: `QR code not found with ID: ${qrId}`
+      });
+    }
+
+    console.log(`[GET_QR] Found QR code:`, {
+      id: qrCode._id,
+      uniqueId: qrCode.uniqueId,
+      articleName: qrCode.articleName,
+      status: qrCode.status
+    });
+
+    // Return the QR data in the same format as the QR scanner expects
+    const qrData = {
+      uniqueId: qrCode.uniqueId,
+      articleName: qrCode.articleName,
+      contractorInput: qrCode.contractorInput,
+      productReference: qrCode.productReference,
+      status: qrCode.status,
+      batchInfo: qrCode.batchInfo
+    };
+
+    return res.status(200).json({
+      result: true,
+      message: "QR code fetched successfully",
+      data: qrData
+    });
+
+  } catch (error) {
+    console.error("[ERROR] Failed to fetch QR code:", error);
+    res.status(500).json({
+      result: false,
+      message: "Failed to fetch QR code",
+      error: error.message
+    });
+  }
+};
+
+const getPastOrders = async (req, res) => {
+  try {
+    const { 
+      search = '', 
+      distributor = '', 
+      startDate, 
+      endDate,
+      page = 1,
+      limit = 20
+    } = req.query;
+
+    // ✅ AUTO-DELETE orders older than 30 days
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    
+    const deleteResult = await purchaseProductModel.deleteMany({
+      createdAt: { $lt: thirtyDaysAgo }
+    });
+    
+    if (deleteResult.deletedCount > 0) {
+      console.log(`[CLEANUP] Deleted ${deleteResult.deletedCount} orders older than 30 days`);
+    }
+
+    // Build query
+    const query = {};
+
+    if (distributor) {
+      query.distributorId = distributor;
+    }
+
+    if (search) {
+      query.$or = [
+        { orderId: { $regex: search, $options: 'i' } },
+        { 'distributorDetails.partyName': { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) query.createdAt.$gte = new Date(startDate);
+      if (endDate) query.createdAt.$lte = new Date(endDate);
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const orders = await purchaseProductModel.find(query)
+      .populate('distributorId', 'name phoneNo distributorDetails')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const totalOrders = await purchaseProductModel.countDocuments(query);
+
+    // Get unique distributors for filter
+    const distributors = await purchaseProductModel.distinct('distributorId');
+    const distributorsList = await userModel.find({
+      _id: { $in: distributors },
+      role: 'distributor'
+    }).select('_id name distributorDetails.partyName');
+
+    res.status(200).json({
+      result: true,
+      message: 'Past orders retrieved',
+      data: {
+        orders: orders.map(order => ({
+          _id: order._id,
+          orderId: order.orderId || `ORD_${order._id}`,
+          distributorName: order.distributorId?.distributorDetails?.partyName || 
+                          order.distributorId?.name || 'Unknown',
+          distributorPhone: order.distributorId?.phoneNo || 'N/A',
+          totalAmount: order.totalAmount || 0,
+          totalItems: order.items?.length || 0,
+          createdAt: order.createdAt,
+          // Remove status field as requested
+        })),
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: Math.ceil(totalOrders / parseInt(limit)),
+          totalOrders,
+          limit: parseInt(limit)
+        },
+        filters: {
+          distributors: distributorsList.map(d => ({
+            _id: d._id,
+            name: d.distributorDetails?.partyName || d.name
+          }))
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('[PAST-ORDERS] Error:', error);
+    res.status(500).json({
+      result: false,
+      message: 'Failed to fetch past orders',
+      error: error.message
+    });
+  }
+};
+
+
+export { getQRCodeById };
 
 
 

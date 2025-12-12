@@ -663,45 +663,20 @@ const getAllProducts = async (req, res) => {
 
 const addBestDeals = async (req, res) => {
     try {
-        let {
-            dealType,
-            segmentName,
-            articleId,
-            articleName,
-            variantName,
-            noOfPurchase,
-            start,
-            end,
-            reward
-        } = req?.body;
+        let { dealName, start, end } = req?.body;
 
         let startDate = new Date(start);
         let endDate = new Date(end);
         
-        articleName = articleName ? articleName.trim() : "";
-        reward = reward ? reward.trim() : "";
-        segmentName = segmentName ? segmentName.trim() : "";
+        // Trim deal name
+        dealName = dealName ? dealName.trim() : "";
 
-        // Validate deal type
-        if (!dealType || !['segment', 'article'].includes(dealType)) {
+        // ✅ ACTIVE VALIDATIONS
+        // Validate deal name
+        if (!dealName) {
             return res.status(statusCodes.badRequest).send({
                 result: false,
-                message: "Invalid deal type. Must be 'segment' or 'article'"
-            });
-        }
-
-        // Validate based on deal type
-        if (dealType === 'segment' && !segmentName) {
-            return res.status(statusCodes.badRequest).send({
-                result: false,
-                message: "Segment name is required for segment deals"
-            });
-        }
-
-        if (dealType === 'article' && (!articleId || !articleName)) {
-            return res.status(statusCodes.badRequest).send({
-                result: false,
-                message: "Article ID and name are required for article deals"
+                message: "Deal name is required"
             });
         }
 
@@ -717,7 +692,20 @@ const addBestDeals = async (req, res) => {
         if (!req.files || req.files.length === 0) {
             return res.status(statusCodes.badRequest).send({
                 result: false,
-                message: "Please Upload At Least One Image"
+                message: "Please Upload An Offer Image"
+            });
+        }
+
+        // Check if deal name already exists
+        const existingDeal = await dealsModel.findOne({ 
+            dealName: dealName, 
+            isActive: true 
+        });
+
+        if (existingDeal) {
+            return res.status(statusCodes.badRequest).send({
+                result: false,
+                message: "A deal with this name already exists. Please use a different name."
             });
         }
 
@@ -736,84 +724,27 @@ const addBestDeals = async (req, res) => {
 
         let imageUrl = uploadResults.map((file) => file.secure_url);
 
-        // Check if deal already exists
-        let dealQuery = {};
-        if (dealType === 'segment') {
-            dealQuery = { segmentName: segmentName, dealType: 'segment', isActive: true };
-        } else {
-            dealQuery = { articleId: articleId, dealType: 'article', isActive: true };
-        }
-
-        let dealAlreadyExists = await dealsModel.findOne(dealQuery);
-
-        if (dealAlreadyExists) {
-            return res.status(statusCodes.badRequest).send({
-                result: false,
-                message: `Active deal already exists for this ${dealType}`
-            });
-        }
-
-        // Create the deal
+        // ✅ Create the simplified deal
         const newDeal = await dealsModel.create({
-            dealType,
-            segmentName: dealType === 'segment' ? segmentName : undefined,
-            articleId: dealType === 'article' ? articleId : undefined,
-            articleName,
-            variantName: variantName || undefined,
+            dealName,
             startDate,
             endDate,
             image: imageUrl[0],
-            noOfPurchase: parseInt(noOfPurchase),
-            reward,
             expireAt: endDate,
             isActive: true
         });
 
-        // Update product/articles based on deal type
-        if (dealType === 'segment') {
-            // Update all articles in this segment
-            await productModel.updateMany(
-                { segment: segmentName },
-                {
-                    $set: {
-                        "variants.$[].articles.$[].deal.minQuantity": parseInt(noOfPurchase).toString(),
-                        "variants.$[].articles.$[].deal.reward": reward,
-                        "variants.$[].articles.$[].indeal": true
-                    }
-                }
-            );
-        } else {
-            // Update only the specific article
-            await productModel.findOneAndUpdate(
-                { "variants.articles._id": articleId },
-                {
-                    $set: {
-                        "variants.$[v].articles.$[a].deal.minQuantity": parseInt(noOfPurchase).toString(),
-                        "variants.$[v].articles.$[a].deal.reward": reward,
-                        "variants.$[v].articles.$[a].indeal": true
-                    }
-                },
-                {
-                    arrayFilters: [
-                        { "v.articles._id": articleId },
-                        { "a._id": articleId }
-                    ],
-                    new: true
-                }
-            );
-        }
-
         return res.status(statusCodes.success).send({
             result: true,
-            message: `${dealType === 'segment' ? 'Segment-wide' : 'Article'} deal added successfully`,
+            message: `Offer "${dealName}" added successfully`,
             data: newDeal
         });
 
     } catch (error) {
-        console.error('Error adding deal:', error);
+        console.error('Error adding offer:', error);
         return res.status(statusCodes.serverError).send({
             result: false,
-            message: "Error in Adding Deals. Please Try Again Later",
+            message: "Error in Adding Offer. Please Try Again Later",
             error: error.message
         });
     }
@@ -825,14 +756,14 @@ const getDeals = async (req, res) => {
 
         return res.status(statusCodes.success).send({
             result: true,
-            message: allDeals.length ? "Found All Deals" : "No Active Deals",
+            message: allDeals.length ? "Found All Offers" : "No Active Offers",
             data: allDeals
         });
     } catch (error) {
-        console.error('Error getting deals:', error);
+        console.error('Error getting offers:', error);
         return res.status(statusCodes.serverError).send({
             result: false,
-            message: "Error in Getting Deals. Please Try Again Later"
+            message: "Error in Getting Offers. Please Try Again Later"
         });
     }
 };
@@ -844,7 +775,7 @@ const deleteDeals = async (req, res) => {
         if (!productid) {
             return res.status(statusCodes.badRequest).send({
                 result: false,
-                message: "Deal ID Invalid"
+                message: "Offer ID Invalid"
             });
         }
 
@@ -853,16 +784,17 @@ const deleteDeals = async (req, res) => {
         if (!dealInTable) {
             return res.status(statusCodes.badRequest).send({
                 result: false,
-                message: "Deal Not Found"
+                message: "Offer Not Found"
             });
         }
 
-        // Delete the deal
+        // ✅ Delete the deal
         await dealsModel.findByIdAndDelete(productid);
 
+        // ❌ COMMENTED OUT - May be needed in future
+        /*
         // Remove deal from products based on deal type
         if (dealInTable.dealType === 'segment') {
-            // Remove deal from all articles in segment
             await productModel.updateMany(
                 { segment: dealInTable.segmentName },
                 {
@@ -873,7 +805,6 @@ const deleteDeals = async (req, res) => {
                 }
             );
         } else {
-            // Remove deal from specific article
             await productModel.findOneAndUpdate(
                 { "variants.articles._id": dealInTable.articleId },
                 {
@@ -891,17 +822,18 @@ const deleteDeals = async (req, res) => {
                 }
             );
         }
+        */
 
         return res.status(statusCodes.success).send({
             result: true,
-            message: "Deal Deleted Successfully"
+            message: "Offer Deleted Successfully"
         });
 
     } catch (error) {
-        console.error('Error deleting deal:', error);
+        console.error('Error deleting offer:', error);
         return res.status(statusCodes.serverError).send({
             result: false,
-            message: "Error in Deleting Deals. Please Try Again Later"
+            message: "Error in Deleting Offer. Please Try Again Later"
         });
     }
 };
@@ -914,7 +846,7 @@ const updateDeal = async (req, res) => {
         if (!dealId) {
             return res.status(statusCodes.badRequest).send({
                 result: false,
-                message: "Deal ID Invalid"
+                message: "Offer ID Invalid"
             });
         }
 
@@ -923,7 +855,7 @@ const updateDeal = async (req, res) => {
         if (!dealInDb) {
             return res.status(statusCodes.badRequest).send({
                 result: false,
-                message: "Deal Not Found"
+                message: "Offer Not Found"
             });
         }
 
@@ -951,18 +883,17 @@ const updateDeal = async (req, res) => {
 
         return res.status(statusCodes.success).send({
             result: true,
-            message: "Deal Updated Successfully"
+            message: "Offer Updated Successfully"
         });
 
     } catch (error) {
-        console.error('Error updating deal:', error);
+        console.error('Error updating offer:', error);
         return res.status(statusCodes.serverError).send({
             result: false,
-            message: "Error in Updating Deals. Please Try Again Later"
+            message: "Error in Updating Offer. Please Try Again Later"
         });
     }
 };
-
 
 const getPurchases = async (req,res) => {
   try {

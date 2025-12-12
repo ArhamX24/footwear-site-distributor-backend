@@ -1,6 +1,6 @@
 import express from "express";
 import {getDeals} from "../Controllers/Admin/products.controllers.js";
-import {purchaseProduct, getAllProducts, fetchAllDealsImages, fetchFilters, fetchProductData, generateOrderPerforma, getDistributor, fetchArticleDetailsFromInventory, searchProducts, getPastOrders} from "../Controllers/User/user.contollers.js";
+import {purchaseProduct, getAllProducts, fetchAllDealsImages, fetchFilters, fetchProductData, generateOrderPerforma, getDistributor, fetchArticleDetailsFromInventory, searchProducts, getPastOrders, getCombinedOffers} from "../Controllers/User/user.contollers.js";
 import userAuth from "../MIddlewares/userauth.middleware.js";
 import multer from "multer";
 import { getFestivleImages } from "../Controllers/Admin/admin.controllers.js";
@@ -25,5 +25,6 @@ userRouter.get("/deals/get", getDeals)
 .get("/article-details/:articleId", fetchArticleDetailsFromInventory)
 .get("/products/search", searchProducts)
 .get("/orders/past", authenticateToken ,getPastOrders)
+.get("/offers/all", getCombinedOffers)
 
 export default userRouter

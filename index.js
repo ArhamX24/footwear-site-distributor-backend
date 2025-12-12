@@ -11,11 +11,9 @@ import contractorRouter from "./Routes/contractor.router.js";
 import warehouseRouter from "./Routes/warehouse.router.js";    
 import shipmentRouter from "./Routes/shipment.router.js";      
 
-import cron from "node-cron";
 import dealsModel from "./Models/Deals.model.js";
 import productModel from "./Models/Product.model.js";
 import mongoose from "mongoose";
-import inngestRouter from "./Routes/inngest.router.js";
 
 const server = express();
 
@@ -49,9 +47,6 @@ server.use(cors({
   optionsSuccessStatus: 200
 }));
 
-server.use("/api/inngest", inngestRouter)
-
-
 server.use("/api/v1/auth", AuthRouter);
 server.use("/api/v1/admin", adminRouter);
 server.use("/api/v1/distributor", userRouter);
@@ -77,17 +72,6 @@ server.get("/api/v1/health", (req, res) => {
 });
 
 
-process.on('SIGTERM', () => {
-  console.log('👋 SIGTERM received, shutting down gracefully...');
-  server.close(() => {
-    mongoose.connection.close(false, () => {
-      console.log('✅ MongoDB connection closed');
-      process.exit(0);
-    });
-  });
-});
-
-// Database connection and server startup
 dbConnect()
   .then(() => {
     const PORT = process.env.PORT || 5000;
