@@ -696,15 +696,12 @@ const generateQRCodes = async (req, res) => {
   }
 };
 
-
-
 const scanQRCode = async (req, res) => {
   try {
     const { uniqueId } = req.params;
     const { event, notes, qualityCheck, distributorDetails, trackingNumber } = req.body;
     
-    console.log('[SCAN] ========== Starting Scan ==========');
-    console.log('[SCAN] UniqueId:', uniqueId, ', Event:', event);
+
     
     if (!req.user || !req.user.id) {
       return res.status(401).json({
@@ -721,18 +718,20 @@ const scanQRCode = async (req, res) => {
     }
 
     if (!qrCode) {
+
       return res.status(404).json({
         result: false,
         message: `QR code not found: ${uniqueId}`
       });
     }
 
-    console.log('[SCAN] Found QR:', qrCode.uniqueId, ', Current Status:', qrCode.status);
+
 
     const articleId = qrCode.contractorInput?.articleId || 
                      qrCode.productReference?.articleId?.toString() || null;
     const articleName = qrCode.contractorInput?.articleName || 
                        qrCode.articleName || null;
+
 
     if (!articleId || !articleName) {
       return res.status(400).json({
@@ -749,7 +748,7 @@ const scanQRCode = async (req, res) => {
       });
     }
 
-    // ✅ FIXED: Get product info (including article image)
+    // Get product info
     const productId = qrCode.productReference?.productId;
     let segment = 'Unknown';
     let variantName = 'Unknown';
@@ -770,7 +769,7 @@ const scanQRCode = async (req, res) => {
             $project: {
               segment: '$segment',
               variantName: '$variants.name',
-              articleImage: '$variants.articles.image'  // ✅ Get article image
+              articleImage: '$variants.articles.image'
             }
           },
           { $limit: 1 }
@@ -779,9 +778,9 @@ const scanQRCode = async (req, res) => {
         if (productData && productData.length > 0) {
           segment = productData[0].segment || 'Unknown';
           variantName = productData[0].variantName || 'Unknown';
-          articleImage = productData[0].articleImage || null;  // ✅ Store article image
+          articleImage = productData[0].articleImage || null;
           
-          console.log('[SCAN] Article Image:', articleImage);
+
         }
       } catch (err) {
         console.error('[SCAN] Product lookup error:', err);
@@ -790,9 +789,10 @@ const scanQRCode = async (req, res) => {
 
     // ========== EVENT: RECEIVED (Warehouse Scan) ==========
     if (event === 'received') {
-      console.log('[RECEIVED] Processing warehouse scan');
+
 
       if (qrCode.status === 'received') {
+
         return res.status(400).json({
           result: false,
           message: "This QR has already been received"
@@ -803,8 +803,7 @@ const scanQRCode = async (req, res) => {
       let inventory = await Inventory.findOne({ articleId: articleId.toString() });
 
       if (!inventory) {
-        console.log('[INVENTORY] Creating new inventory for:', articleName);
-        
+
         inventory = new Inventory({
           articleId: articleId.toString(),
           articleName,
@@ -815,9 +814,12 @@ const scanQRCode = async (req, res) => {
           availableQuantity: 0,
           qrCodes: []
         });
+      } else {
+
       }
 
-      // Add scan record to QR
+
+      
       qrCode.scans.push({
         scannedAt: new Date(),
         scannedBy: req.user.id,
@@ -845,13 +847,10 @@ const scanQRCode = async (req, res) => {
       };
 
       await qrCode.save();
-      console.log('[QRCODE] Saved with "received" status');
 
-      // ✅ Sync inventory (ONE QR = ONE UNIT)
       await inventory.syncWithQRCode(qrCode._id);
       
-      console.log('[SUCCESS] ✅ Warehouse scan completed');
-      
+
       return res.status(200).json({
         result: true,
         message: "Warehouse receipt scan completed",
@@ -873,9 +872,9 @@ const scanQRCode = async (req, res) => {
 
     // ========== EVENT: SHIPPED (Shipment Scan) ==========
     if (event === 'shipped') {
-      console.log('[SHIPPED] Processing shipment scan');
 
       if (qrCode.status === 'shipped') {
+
         return res.status(400).json({
           result: false,
           message: "This QR has already been shipped"
@@ -883,6 +882,7 @@ const scanQRCode = async (req, res) => {
       }
 
       if (qrCode.status !== 'received') {
+
         return res.status(400).json({
           result: false,
           message: "QR must be received at warehouse before shipping"
@@ -896,7 +896,7 @@ const scanQRCode = async (req, res) => {
         });
       }
 
-      // ✅ GET FULL DISTRIBUTOR DETAILS FROM DATABASE
+      // Get distributor
       const distributor = await userModel.findById(distributorDetails.distributorId);
       
       if (!distributor) {
@@ -906,8 +906,8 @@ const scanQRCode = async (req, res) => {
         });
       }
 
-      // ✅ CRITICAL FIX: Save QR first BEFORE creating shipment
-      // This prevents double inventory sync
+
+      
       qrCode.scans.push({
         scannedAt: new Date(),
         scannedBy: req.user.id,
@@ -919,13 +919,11 @@ const scanQRCode = async (req, res) => {
 
       qrCode.totalScans = (qrCode.totalScans || 0) + 1;
       qrCode.lastScannedAt = new Date();
-      qrCode.status = 'shipped';  // ✅ CHANGE STATUS FIRST
+      qrCode.status = 'shipped';  // ✅ Change status FIRST
 
-      // ✅ Save QR code BEFORE inventory sync
       await qrCode.save();
-      console.log('[QRCODE] ✅ Status changed to "shipped" BEFORE shipment creation');
 
-      // ✅ FIND OR CREATE SHIPMENT
+      
       let shipment = await Shipment.findOne({
         distributorId: distributor._id,
         status: { $in: ['pending', 'in_transit'] }
@@ -935,7 +933,7 @@ const scanQRCode = async (req, res) => {
         qrCodeId: qrCode._id,
         uniqueId: qrCode.uniqueId,
         articleName: qrCode.articleName || articleName,
-        articleImage: articleImage,  // ✅ FIXED: Include article image
+        articleImage: articleImage,
         articleDetails: {
           colors: qrCode.contractorInput?.colors || [],
           sizes: qrCode.contractorInput?.sizes || [],
@@ -953,31 +951,23 @@ const scanQRCode = async (req, res) => {
       };
 
       if (!shipment) {
-        // ✅ CREATE NEW SHIPMENT with all required fields from schema
         const shipmentId = `SHIP_${Date.now()}_${distributor._id.toString().slice(-6)}`;
         
         shipment = new Shipment({
           shipmentId: shipmentId,
-          
-          // Distributor details
           distributorId: distributor._id,
           distributorName: distributor.distributorDetails?.partyName || distributor.name,
           distributorPhoneNo: distributor.phoneNo,
           distributorCity: distributor.distributorDetails?.cityName || distributor.distributorDetails?.city,
           distributorTransport: distributor.distributorDetails?.transport,
           distributorPartyName: distributor.distributorDetails?.partyName,
-          
-          // Items array
           items: [shipmentItemData],
-          
-          // Shipment manager details
           shippedBy: {
             userId: req.user.id,
             userType: 'shipment_manager',
             name: req.user.name || 'Shipment Manager',
             phoneNo: req.user.phoneNo
           },
-          
           shippedAt: new Date(),
           totalCartons: 1,
           status: 'in_transit',
@@ -985,20 +975,17 @@ const scanQRCode = async (req, res) => {
           notes: notes || `Shipment to ${distributor.distributorDetails?.partyName || distributor.name}`
         });
 
-        console.log('[SHIPMENT] Creating new shipment:', shipment.shipmentId);
+
       } else {
-        // ✅ ADD TO EXISTING SHIPMENT
         shipment.items.push(shipmentItemData);
         shipment.totalCartons = shipment.items.length;
         shipment.notes = `${shipment.notes || ''} | Added ${articleName}`.trim();
-        
-        console.log('[SHIPMENT] Adding to existing shipment:', shipment.shipmentId);
+
       }
 
       await shipment.save();
-      console.log('[SHIPMENT] ✅ Shipment saved');
-
-      // ✅ UPDATE QR CODE WITH SHIPMENT DETAILS (after shipment is saved)
+   
+      
       qrCode.shipmentDetails = {
         shippedAt: new Date(),
         shippedBy: {
@@ -1014,18 +1001,21 @@ const scanQRCode = async (req, res) => {
       };
 
       await qrCode.save();
-      console.log('[QRCODE] ✅ Shipment details added to QR code');
-
-      // ✅ CRITICAL FIX: Only sync inventory ONCE after everything is complete
+  
+      
       const inventory = await Inventory.findOne({ articleId: articleId.toString() });
       
       if (inventory) {
-        // Since QR status is already "shipped", syncWithQRCode will correctly move it
+
+        
+        // Since QR status is already "shipped", this will only deduct
         await inventory.syncWithQRCode(qrCode._id);
-        console.log('[INVENTORY] ✅ Synced (deducted 1 from available)');
+
+      } else {
+        console.log('[SHIPPED] ⚠️ No inventory found for article');
       }
 
-      console.log('[SUCCESS] ✅ Shipment scan completed');
+
 
       return res.status(200).json({
         result: true,
@@ -1052,7 +1042,11 @@ const scanQRCode = async (req, res) => {
     }
 
   } catch (error) {
-    console.error('[SCAN] ❌ Error:', error);
+    console.error('\n[SCAN] ❌❌❌ FATAL ERROR ❌❌❌');
+    console.error('[SCAN] Error message:', error.message);
+    console.error('[SCAN] Error stack:', error.stack);
+    console.error('[SCAN] ========================================\n');
+    
     res.status(500).json({
       result: false,
       message: "Scan failed",
@@ -1060,7 +1054,6 @@ const scanQRCode = async (req, res) => {
     });
   }
 };
-
 
 const downloadQRCodes = async (req, res) => {
     try {
@@ -1300,8 +1293,6 @@ const generateShipmentReceipt = async (req, res) => {
   try {
     const { shipmentId, distributorName, distributorPhoneNo, totalCartons, shippedAt, items } = req.body;
 
-    console.log('[PDF] Generating receipt for:', shipmentId);
-    console.log('[PDF] Received items:', JSON.stringify(items, null, 2));
 
     if (!shipmentId || !items || items.length === 0) {
       return res.status(400).json({
@@ -1311,72 +1302,99 @@ const generateShipmentReceipt = async (req, res) => {
     }
 
     const PDFDocument = require('pdfkit');
-    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+    const doc = new PDFDocument({
+      size: 'A4',
+      margin: 30,
+      bufferPages: true
+    });
 
-    // Set response headers for PDF download
+    // Set response headers
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="Shipment_${shipmentId}_Receipt.pdf"`);
 
-    // Pipe PDF to response
+    // Pipe to response
     doc.pipe(res);
 
-    // Header Section
-    doc.fontSize(24).fillColor('#2563eb').text('SHIPMENT RECEIPT', 50, 50, { align: 'center' });
-    doc.fontSize(12).fillColor('#666666').text('Official Shipping Documentation', 50, 80, { align: 'center' });
+    // ========== HEADER SECTION ==========
+    doc.fontSize(20).font('Helvetica-Bold').text('SHIPMENT RECEIPT', { align: 'center' });
+    doc.fontSize(9).font('Helvetica').text('Official Shipment Document', { align: 'center' });
+    doc.moveTo(30, doc.y + 3).lineTo(565, doc.y + 3).stroke();
+    doc.moveDown(0.5);
 
-    // Draw header line
-    doc.strokeColor('#2563eb').lineWidth(3).moveTo(50, 100).lineTo(545, 100).stroke();
+    // ========== SHIPMENT & DISTRIBUTOR INFO ==========
+    const infoStartY = doc.y;
+    
+    // LEFT COLUMN - Shipment Details
+    doc.fontSize(10).font('Helvetica-Bold').text('SHIPMENT INFO', 30, infoStartY, { underline: true });
+    doc.fontSize(8).font('Helvetica');
+    
+    let leftY = infoStartY + 15;
+    doc.text(`Shipment ID: ${shipmentId}`, 30, leftY);
+    leftY += 12;
+    doc.text(`Status: IN TRANSIT`, 30, leftY);
+    leftY += 12;
+    doc.text(`Shipped: ${new Date(shippedAt).toLocaleDateString('en-GB')}`, 30, leftY);
+    leftY += 12;
+    doc.text(`Total Cartons: ${totalCartons}`, 30, leftY);
 
-    // Company Info Section
-    doc.fontSize(16).fillColor('#1f2937').text('Pinkey Footwear', 50, 130);
-    doc.fontSize(10).fillColor('#666666')
-      .text('Address: Main Warehouse Facility', 50, 150)
-      .text('Phone: +91 XXXXX XXXXX', 50, 165);
+    // RIGHT COLUMN - Distributor Details
+    doc.fontSize(10).font('Helvetica-Bold').text('DISTRIBUTOR INFO', 320, infoStartY, { underline: true });
+    doc.fontSize(8).font('Helvetica');
+    
+    let rightY = infoStartY + 15;
+    doc.text(`Name: ${distributorName || 'Unknown'}`, 320, rightY);
+    rightY += 12;
+    doc.text(`Contact: ${distributorPhoneNo || 'N/A'}`, 320, rightY);
 
-    // Shipment Details Box
-    doc.rect(50, 220, 245, 120).fillAndStroke('#f9fafb', '#e5e7eb');
-    doc.fontSize(14).fillColor('#1f2937').text('Shipment Details', 60, 235);
-    doc.fontSize(10).fillColor('#4b5563')
-      .text(`Shipment ID: ${shipmentId}`, 60, 255)
-      .text(`Date: ${new Date(shippedAt).toLocaleDateString()}`, 60, 270)
-      .text(`Time: ${new Date(shippedAt).toLocaleTimeString()}`, 60, 285)
-      .text(`Status: IN_TRANSIT`, 60, 300)
-      .text(`Total Cartons: ${totalCartons}`, 60, 315);
+    // Set Y position after both columns
+    doc.y = Math.max(leftY, rightY) + 10;
+    doc.moveTo(30, doc.y).lineTo(565, doc.y).stroke();
+    doc.moveDown(0.5);
 
-    // Distributor Details Box
-    doc.rect(300, 220, 245, 120).fillAndStroke('#f9fafb', '#e5e7eb');
-    doc.fontSize(14).fillColor('#1f2937').text('Distributor Information', 310, 235);
-    doc.fontSize(10).fillColor('#4b5563')
-      .text(`Company: ${distributorName || 'N/A'}`, 310, 255)
-      .text(`Contact: ${distributorPhoneNo || 'N/A'}`, 310, 270);
+    // ========== ARTICLE DETAILS TABLE ==========
+    doc.fontSize(10).font('Helvetica-Bold').text('ARTICLE DETAILS', { align: 'center', underline: true });
+    doc.moveDown(0.5);
 
-    // Items Table Header
-    doc.fontSize(16).fillColor('#1f2937').text('Shipped Items', 50, 370);
+    // Table Header
+    const tableTop = doc.y;
+    const col1X = 30;   // Article Name
+    const col2X = 150;  // Colors
+    const col3X = 280;  // Sizes
+    const col4X = 360;  // Carton
+    const col5X = 440;  // Unique ID
+    const rowHeight = 20;
 
-    // Table Header Background
-    doc.rect(50, 400, 495, 25).fillAndStroke('#2563eb', '#2563eb');
-    doc.fontSize(9).fillColor('white')
-      .text('#', 60, 410, { width: 25 })
-      .text('Article', 90, 410, { width: 95 })
-      .text('Colors', 190, 410, { width: 100 })
-      .text('Sizes', 295, 410, { width: 75 })
-      .text('Carton', 375, 410, { width: 50 })
-      .text('Unique ID', 430, 410, { width: 115 });
+    // Header Background
+    doc.rect(col1X - 5, tableTop, 540, rowHeight).fill('#e8e8e8');
+    doc.fill('#000000');
 
-    // ✅ FIXED: Table Rows - Extract from items array
-    let yPosition = 430;
+    doc.fontSize(7).font('Helvetica-Bold');
+    doc.text('Article', col1X, tableTop + 6, { width: 110, lineBreak: false });
+    doc.text('Colors', col2X, tableTop + 6, { width: 120, lineBreak: false });
+    doc.text('Sizes', col3X, tableTop + 6, { width: 70, lineBreak: false });
+    doc.text('Carton', col4X, tableTop + 6, { width: 70, lineBreak: false });
+    doc.text('Unique ID', col5X, tableTop + 6, { width: 120, lineBreak: false });
+
+    let currentY = tableTop + rowHeight;
+    doc.font('Helvetica').fontSize(7);
+
+    // Table Rows
     items.forEach((item, index) => {
+      const rowY = currentY;
+
       // Alternate row colors
       if (index % 2 === 0) {
-        doc.rect(50, yPosition - 5, 495, 22).fillAndStroke('#f9fafb', '#f9fafb');
+        doc.rect(col1X - 5, rowY, 540, rowHeight).fill('#ffffff');
+      } else {
+        doc.rect(col1X - 5, rowY, 540, rowHeight).fill('#f5f5f5');
       }
+      doc.fill('#000000');
 
-      // ✅ Extract article details from the item (sent from frontend)
-      console.log(`[PDF] Processing item ${index + 1}:`, item);
+      // Article Name
+      const articleName = String(item.articleName || 'N/A');
+      doc.text(articleName, col1X, rowY + 6, { width: 110, lineBreak: false });
 
-      const articleName = item.articleName || 'Unknown';
-      
-      // ✅ Colors - check multiple sources
+      // Colors
       let colors = 'N/A';
       if (item.colors && Array.isArray(item.colors)) {
         colors = item.colors.join(', ');
@@ -1387,8 +1405,9 @@ const generateShipmentReceipt = async (req, res) => {
           ? item.articleDetails.colors.join(', ') 
           : item.articleDetails.colors;
       }
+      doc.text(colors, col2X, rowY + 6, { width: 120, lineBreak: false });
 
-      // ✅ Sizes - check multiple sources and format
+      // Sizes - Format as range
       let sizes = 'N/A';
       if (item.sizesFormatted) {
         sizes = item.sizesFormatted;
@@ -1409,58 +1428,54 @@ const generateShipmentReceipt = async (req, res) => {
           }
         }
       }
+      doc.text(sizes, col3X, rowY + 6, { width: 70, lineBreak: false });
 
-      // ✅ Carton number
+      // Carton number
       const cartonNum = item.cartonNumber || 
                        item.articleDetails?.cartonNumber || 
                        (index + 1);
+      doc.text(cartonNum.toString(), col4X, rowY + 6, { width: 70, lineBreak: false });
 
-      // ✅ Unique ID
+      // Unique ID (shortened)
       const uniqueId = item.uniqueId || 'N/A';
-      const shortUniqueId = uniqueId.length > 12 ? uniqueId.substring(0, 12) + '...' : uniqueId;
+      const shortUniqueId = uniqueId.length > 18 ? uniqueId.substring(0, 18) + '...' : uniqueId;
+      doc.text(shortUniqueId, col5X, rowY + 6, { width: 120, lineBreak: false });
 
-      console.log(`[PDF] Item ${index + 1} - Article: ${articleName}, Colors: ${colors}, Sizes: ${sizes}, Carton: ${cartonNum}`);
+      currentY += rowHeight;
 
-      // Draw row
-      doc.fillColor('#1f2937').fontSize(9)
-        .text((index + 1).toString(), 60, yPosition, { width: 25 })
-        .text(articleName, 90, yPosition, { width: 95, ellipsis: true })
-        .text(colors, 190, yPosition, { width: 100, ellipsis: true })
-        .text(sizes, 295, yPosition, { width: 75 })
-        .text(cartonNum.toString(), 375, yPosition, { width: 50 })
-        .text(shortUniqueId, 430, yPosition, { width: 115, ellipsis: true });
-
-      yPosition += 22;
-
-      // ✅ Add new page if needed
-      if (yPosition > 700 && index < items.length - 1) {
+      // Add new page if needed
+      if (currentY > 700 && index < items.length - 1) {
         doc.addPage();
-        yPosition = 50;
+        currentY = 50;
         
         // Re-add table header on new page
-        doc.rect(50, yPosition, 495, 25).fillAndStroke('#2563eb', '#2563eb');
-        doc.fontSize(9).fillColor('white')
-          .text('#', 60, yPosition + 10, { width: 25 })
-          .text('Article', 90, yPosition + 10, { width: 95 })
-          .text('Colors', 190, yPosition + 10, { width: 100 })
-          .text('Sizes', 295, yPosition + 10, { width: 75 })
-          .text('Carton', 375, yPosition + 10, { width: 50 })
-          .text('Unique ID', 430, yPosition + 10, { width: 115 });
+        doc.rect(col1X - 5, currentY, 540, rowHeight).fill('#e8e8e8');
+        doc.fill('#000000');
+        doc.fontSize(7).font('Helvetica-Bold');
+        doc.text('Article', col1X, currentY + 6, { width: 110, lineBreak: false });
+        doc.text('Colors', col2X, currentY + 6, { width: 120, lineBreak: false });
+        doc.text('Sizes', col3X, currentY + 6, { width: 70, lineBreak: false });
+        doc.text('Carton', col4X, currentY + 6, { width: 70, lineBreak: false });
+        doc.text('Unique ID', col5X, currentY + 6, { width: 120, lineBreak: false });
         
-        yPosition += 30;
+        currentY += rowHeight;
       }
     });
 
-    // Footer
-    const footerY = Math.min(yPosition + 50, 720);
-    doc.fontSize(10).fillColor('#6b7280')
-      .text(`Receipt generated on ${new Date().toLocaleString()}`, 50, footerY, { align: 'center' })
-      .text('This is a computer-generated document.', 50, footerY + 15, { align: 'center', oblique: true });
+    // Total Cartons Row
+    doc.moveTo(30, currentY).lineTo(570, currentY).stroke();
+    doc.fontSize(8).font('Helvetica-Bold');
+    doc.text(`Total Cartons: ${totalCartons || 0}`, 450, currentY + 8);
 
-    // Finalize the PDF
+    // ========== FOOTER ==========
+    doc.moveDown(2);
+    doc.fontSize(7).font('Helvetica').fill('#888888');
+    doc.text(`Generated on: ${new Date().toLocaleString('en-GB')}`, 30);
+
+    // ========== END DOCUMENT ==========
     doc.end();
 
-    console.log('[PDF] ✅ Receipt generated successfully');
+
 
   } catch (error) {
     console.error('[PDF] ❌ Generation failed:', error);
@@ -1660,86 +1675,71 @@ const getSingleProductInventory = async (req, res) => {
 };
 
 const getAllInventory = async (req, res) => {
-    try {
-        // Fetch all inventory with populated product details
-        const inventoryRecords = await Inventory.find({})
-            .populate('productId', 'segment')
-            .sort({ updatedAt: -1 });
+  try {
+    // ✅ FIXED: Remove .populate() since Inventory schema doesn't have productId
+    const inventoryRecords = await Inventory.find()
+      .sort({ updatedAt: -1 });
 
-        if (!inventoryRecords || inventoryRecords.length === 0) {
-            return res.status(statusCodes.success).send({
-                result: true,
-                message: "No inventory data found",
-                data: {
-                    inventoryData: [],
-                    totalProducts: 0
-                }
-            });
-        }
-
-        // ✅ SIMPLE: Each record becomes one row
-        const formattedInventory = inventoryRecords.map(record => {
-            const receivedCount = record.items.filter(item => item.status === 'received').length;
-            const shippedCount = record.items.filter(item => item.status === 'shipped').length;
-            const totalQRs = record.items.length;
-
-            return {
-                productId: record.productId?._id || record.productId,
-                
-                productInfo: {
-                    segment: record.segment || record.productId?.segment || 'Unknown',
-                    totalVariants: 1,
-                    totalArticles: 1
-                },
-                
-                articleBreakdown: {
-                    [record.articleName || 'Unknown']: {
-                        qrsGenerated: totalQRs,
-                        qrsScanned: receivedCount + shippedCount,
-                        lastActivity: record.updatedAt || record.createdAt
-                    }
-                },
-                
-                inventoryMetrics: {
-                    availableQuantity: record.availableQuantity || 0,
-                    quantityByStage: {
-                        received: record.items.filter(i => i.status === 'received')
-                            .reduce((sum, item) => sum + (item.numberOfCartons || 0), 0),
-                        shipped: record.items.filter(i => i.status === 'shipped')
-                            .reduce((sum, item) => sum + (item.numberOfCartons || 0), 0),
-                        pending: record.items.filter(i => i.status === 'pending')
-                            .reduce((sum, item) => sum + (item.numberOfCartons || 0), 0)
-                    }
-                },
-                
-                qrCodeStats: {
-                    totalQRs: totalQRs,
-                    scannedQRs: receivedCount + shippedCount,
-                    pendingQRs: totalQRs - (receivedCount + shippedCount)
-                },
-                
-                lastUpdated: record.updatedAt || record.createdAt
-            };
-        });
-
-        return res.status(statusCodes.success).send({
-            result: true,
-            message: "Inventory data retrieved successfully",
-            data: {
-                inventoryData: formattedInventory,
-                totalProducts: formattedInventory.length
-            }
-        });
-
-    } catch (error) {
-        console.error("Error fetching inventory:", error);
-        return res.status(statusCodes.serverError).send({
-            result: false,
-            message: "Error fetching inventory data",
-            error: error.message
-        });
+    if (!inventoryRecords || inventoryRecords.length === 0) {
+      return res.status(statusCodes.success).send({
+        result: true,
+        message: 'No inventory data found',
+        data: { inventoryData: [], totalProducts: 0 }
+      });
     }
+
+    // ✅ FIXED: Format inventory based on actual schema (articleId, not productId)
+    const formattedInventory = inventoryRecords.map(record => {
+      const receivedCount = record.receivedQuantity || 0;
+      const shippedCount = record.shippedQuantity || 0;
+      const availableCount = record.availableQuantity || 0;
+      const totalQRs = record.qrCodes?.length || 0;
+
+      return {
+        // Article-based inventory (not product-based)
+        articleId: record.articleId,
+        articleName: record.articleName,
+        segment: record.segment || 'Unknown',
+        articleImage: record.articleImage || null,
+        
+        // Inventory metrics
+        inventoryMetrics: {
+          availableQuantity: availableCount,
+          receivedQuantity: receivedCount,
+          shippedQuantity: shippedCount,
+          totalQRCodes: totalQRs
+        },
+        
+        // Summary
+        summary: {
+          totalInStock: availableCount,
+          totalReceived: receivedCount,
+          totalShipped: shippedCount
+        },
+        
+        lastUpdated: record.updatedAt || record.createdAt
+      };
+    });
+
+    return res.status(statusCodes.success).send({
+      result: true,
+      message: 'Inventory data retrieved successfully',
+      data: {
+        inventoryData: formattedInventory,
+        totalProducts: formattedInventory.length
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching inventory:', error);
+    return res.status(statusCodes.serverError).send({
+      result: false,
+      message: 'Error fetching inventory data',
+      error: error.message
+    });
+  }
 };
+
 
 const getQRStatistics = async (req, res) => {
   try {
@@ -2134,8 +2134,7 @@ const addDistributor = async (req, res) => {
   try {
     let { salesmanName, partyName, city, transport, phoneNo, password } = req.body;
 
-    console.log(city);
-    
+
 
     partyName = partyName ? partyName.trim() : "";
     transport = transport ? transport.trim() : "";
@@ -3156,7 +3155,6 @@ const getQRCodeById = async (req, res) => {
   try {
     const { qrId } = req.params;
 
-    console.log(`[GET_QR] Fetching QR code by ID: ${qrId}`);
 
     // Find QR code by MongoDB _id
     const qrCode = await QRCode.findById(qrId);
@@ -3168,12 +3166,6 @@ const getQRCodeById = async (req, res) => {
       });
     }
 
-    console.log(`[GET_QR] Found QR code:`, {
-      id: qrCode._id,
-      uniqueId: qrCode.uniqueId,
-      articleName: qrCode.articleName,
-      status: qrCode.status
-    });
 
     // Return the QR data in the same format as the QR scanner expects
     const qrData = {

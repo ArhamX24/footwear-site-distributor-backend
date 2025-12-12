@@ -170,8 +170,6 @@ const purchaseProduct = async (req, res) => {
       downloadUrl: `https://pinkeyfootwear.in/api/v1/distributor/orders/download-performa/${newPurchaseOrder._id}`,
     });
   } catch (error) {
-    console.log(error);
-    
     return res.status(500).json({
       success: false,
       message: "Error while placing order. Please try again later.",
@@ -505,7 +503,7 @@ const fetchArticleDetailsFromInventory = async (req, res) => {
       });
     }
 
-    console.log(`[INVENTORY] Searching for articleId: ${articleId}`);
+
 
     // ✅ FIXED: Search by top-level articleId, not nested
     const inventory = await Inventory.findOne({ 
@@ -513,18 +511,13 @@ const fetchArticleDetailsFromInventory = async (req, res) => {
     }).populate('productId', 'name segment');
 
     if (!inventory) {
-      console.log(`[INVENTORY] No inventory found for articleId: ${articleId}`);
+
       return res.status(404).json({ 
         message: "No inventory found for this article ID",
         success: false 
       });
     }
 
-    console.log(`[INVENTORY] Found inventory:`, {
-      articleId: inventory.articleId,
-      articleName: inventory.articleName,
-      totalItems: inventory.items.length
-    });
 
     // Aggregate data from items with status 'received'
     let allColors = new Set();
@@ -567,14 +560,6 @@ const fetchArticleDetailsFromInventory = async (req, res) => {
     const colors = Array.from(allColors).sort();
     const sizes = Array.from(allSizes).sort((a, b) => a - b);
 
-    console.log(`[INVENTORY] Aggregated data:`, {
-      colors: colors.length,
-      sizes: sizes.length,
-      received: receivedItems,
-      shipped: shippedItems,
-      available: totalAvailableStock
-    });
-
     // Helper function to format size range
     const formatSizeRange = (sizes) => {
       if (!sizes || sizes.length === 0) return 'N/A';
@@ -609,7 +594,7 @@ const fetchArticleDetailsFromInventory = async (req, res) => {
       }
     };
 
-    console.log(`[INVENTORY] ✅ Returning response:`, response.data);
+
 
     return res.status(200).json(response);
 
