@@ -160,7 +160,7 @@ const generateQRWithLabel = async (qrString, labelData) => {
     return finalImage;
     
   } catch (error) {
-    console.error('[QR-LABEL] Error generating labeled QR:', error);
+
     // Fallback to pure QR
     return await QRCodeLib.toDataURL(qrString, {
       width: 200,
@@ -486,7 +486,7 @@ const getDistributors = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error getting distributors:', error);
+
         res.status(statusCodes.serverError).json({
             result: false,
             message: "Failed to retrieve distributors",
@@ -687,7 +687,7 @@ const generateQRCodes = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[QR-GEN] Error:', error);
+
     res.status(500).json({
       result: false,
       message: 'QR generation failed',
@@ -783,7 +783,7 @@ const scanQRCode = async (req, res) => {
 
         }
       } catch (err) {
-        console.error('[SCAN] Product lookup error:', err);
+
       }
     }
 
@@ -1042,11 +1042,6 @@ const scanQRCode = async (req, res) => {
     }
 
   } catch (error) {
-    console.error('\n[SCAN] ❌❌❌ FATAL ERROR ❌❌❌');
-    console.error('[SCAN] Error message:', error.message);
-    console.error('[SCAN] Error stack:', error.stack);
-    console.error('[SCAN] ========================================\n');
-    
     res.status(500).json({
       result: false,
       message: "Scan failed",
@@ -1478,7 +1473,7 @@ const generateShipmentReceipt = async (req, res) => {
 
 
   } catch (error) {
-    console.error('[PDF] ❌ Generation failed:', error);
+
     
     // If response headers haven't been sent yet, send JSON error
     if (!res.headersSent) {
@@ -1731,7 +1726,7 @@ const getAllInventory = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error fetching inventory:', error);
+
     return res.status(statusCodes.serverError).send({
       result: false,
       message: 'Error fetching inventory data',
@@ -1990,7 +1985,7 @@ const addContractor = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error adding contractor:', error);
+
     res.status(statusCodes.serverError).json({
       result: false,
       message: "Failed to add contractor",
@@ -2055,7 +2050,7 @@ const addWarehouseManager = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error adding warehouse manager:', error);
+
     res.status(statusCodes.serverError).json({
       result: false,
       message: "Failed to add warehouse manager",
@@ -2121,7 +2116,7 @@ const addShipmentManager = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error adding shipment manager:', error);
+
     res.status(statusCodes.serverError).json({
       result: false,
       message: "Failed to add shipment manager",
@@ -2184,7 +2179,7 @@ const addDistributor = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error adding distributor:', error);
+
     return res.status(statusCodes.serverError).json({
       result: false,
       message: "Error in Adding Distributor. Please Try Again Later",
@@ -2952,7 +2947,7 @@ const generateShipmentReceiptPDF = async (req, res) => {
       });
     } else {
       // If we're already streaming PDF, we can't send JSON
-      console.error('PDF generation failed mid-stream:', error.message);
+
     }
   }
 };
@@ -3139,7 +3134,7 @@ const getUserDetails = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error getting user details:', error);
+
     res.status(statusCodes.serverError).json({
       result: false,
       message: "Failed to retrieve user details",
@@ -3184,7 +3179,7 @@ const getQRCodeById = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("[ERROR] Failed to fetch QR code:", error);
+
     res.status(500).json({
       result: false,
       message: "Failed to fetch QR code",
@@ -3284,7 +3279,7 @@ const getPastOrders = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[PAST-ORDERS] Error:', error);
+
     res.status(500).json({
       result: false,
       message: 'Failed to fetch past orders',
