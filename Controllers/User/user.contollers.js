@@ -503,12 +503,9 @@ const fetchArticleDetailsFromInventory = async (req, res) => {
       });
     }
 
-    // Find inventory by articleId and populate QRCode references
+    // ✅ Simple findOne - no need to populate QRCodes for colors/sizes
     const inventory = await Inventory.findOne({ 
       articleId: articleId.toString() 
-    }).populate({
-      path: 'qrCodes.qrCodeId',
-      select: 'uniqueId status articleDetails colors sizes'
     });
 
     if (!inventory) {
@@ -518,38 +515,9 @@ const fetchArticleDetailsFromInventory = async (req, res) => {
       });
     }
 
-    // Aggregate colors and sizes from populated QR codes with 'received' status
-    let allColors = new Set();
-    let allSizes = new Set();
-
-    // Process qrCodes array (only received items for colors/sizes)
-    inventory.qrCodes.forEach(qrEntry => {
-      if (qrEntry.status === 'received' && qrEntry.qrCodeId) {
-        const qrCode = qrEntry.qrCodeId;
-        
-        // Collect colors
-        if (qrCode.colors && Array.isArray(qrCode.colors)) {
-          qrCode.colors.forEach(color => {
-            if (color && color !== 'Unknown' && color.toLowerCase() !== 'unknown') {
-              allColors.add(color.toLowerCase());
-            }
-          });
-        }
-
-        // Collect sizes
-        if (qrCode.sizes && Array.isArray(qrCode.sizes)) {
-          qrCode.sizes.forEach(size => {
-            if (size && size !== 0) {
-              allSizes.add(Number(size));
-            }
-          });
-        }
-      }
-    });
-
-    // Convert Sets to sorted arrays
-    const colors = Array.from(allColors).sort();
-    const sizes = Array.from(allSizes).sort((a, b) => a - b);
+    // ✅ Use colors and sizes directly from inventory document
+    const colors = inventory.colors || [];
+    const sizes = inventory.sizes || [];
 
     // Format size range
     const formatSizeRange = (sizes) => {
@@ -567,8 +535,8 @@ const fetchArticleDetailsFromInventory = async (req, res) => {
         articleName: inventory.articleName || 'Unknown Article',
         segment: inventory.segment || 'Unknown',
         articleImage: inventory.articleImage || null,
-        colors: colors.length > 0 ? colors : [],
-        sizes: sizes.length > 0 ? sizes : [],
+        colors: colors,
+        sizes: sizes,
         sizeRange: formatSizeRange(sizes),
         availableStock: inventory.availableQuantity,
         stockBreakdown: {
@@ -591,6 +559,7 @@ const fetchArticleDetailsFromInventory = async (req, res) => {
     });
   }
 };
+
 
 
 const searchProducts = async (req, res) => {
