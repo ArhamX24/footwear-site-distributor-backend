@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 
 const { Schema, model } = mongoose;
 
+// Models/Inventory.model.js
 const InventorySchema = new Schema({
   articleId: {
     type: String,
@@ -22,6 +23,16 @@ const InventorySchema = new Schema({
     default: null
   },
   
+  // ✅ ADD THESE FIELDS
+  colors: {
+    type: [String],
+    default: []
+  },
+  sizes: {
+    type: [Number],
+    default: []
+  },
+  
   receivedQuantity: {
     type: Number,
     default: 0,
@@ -38,9 +49,8 @@ const InventorySchema = new Schema({
     min: 0
   },
   
-  // ✅ CRITICAL FIX: Add _id: false to prevent auto-indexing
   qrCodes: [{
-    _id: false,  // ✅ This stops Mongoose from creating indexes
+    _id: false,
     qrCodeId: {
       type: Schema.Types.ObjectId,
       ref: 'QRCode',
@@ -71,17 +81,10 @@ const InventorySchema = new Schema({
   }
 }, {
   timestamps: true,
-  autoIndex: false  // ✅ Disable automatic index creation
+  autoIndex: false
 });
 
-// ✅ Only define top-level indexes (NO subdocument indexes)
-InventorySchema.index({ articleId: 1 }, { unique: true });
-InventorySchema.index({ articleName: 1 });
-InventorySchema.index({ segment: 1 });
-
-// ❌ DO NOT add index on qrCodes subdocument fields
-// InventorySchema.index({ 'qrCodes.uniqueId': 1 }); // REMOVE THIS
-
+// Updated syncWithQRCode method
 InventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
   console.log(`[INVENTORY] Syncing with QR: ${qrCodeId}`);
 
@@ -108,6 +111,27 @@ InventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
         
         this.receivedQuantity += 1;
         this.availableQuantity += 1;
+
+        // ✅ ADD COLORS AND SIZES TO INVENTORY
+        if (qrCode.contractorInput?.colors && Array.isArray(qrCode.contractorInput.colors)) {
+          const newColors = qrCode.contractorInput.colors
+            .filter(c => c && c !== 'Unknown' && c.toLowerCase() !== 'unknown')
+            .map(c => c.toLowerCase());
+          
+          // Add only unique colors
+          const uniqueColors = new Set([...this.colors, ...newColors]);
+          this.colors = Array.from(uniqueColors).sort();
+        }
+
+        if (qrCode.contractorInput?.sizes && Array.isArray(qrCode.contractorInput.sizes)) {
+          const newSizes = qrCode.contractorInput.sizes
+            .filter(s => s && s !== 0)
+            .map(s => Number(s));
+          
+          // Add only unique sizes
+          const uniqueSizes = new Set([...this.sizes, ...newSizes]);
+          this.sizes = Array.from(uniqueSizes).sort((a, b) => a - b);
+        }
       }
     } else {
       const existingQR = this.qrCodes[existingIndex];
@@ -124,16 +148,20 @@ InventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
     }
 
     this.markModified('qrCodes');
+    this.markModified('colors');
+    this.markModified('sizes');
     this.lastUpdated = new Date();
 
     await this.save();
-    console.log('[INVENTORY] ✅ Saved');
+    console.log('[INVENTORY] ✅ Saved with colors:', this.colors, 'sizes:', this.sizes);
 
     return {
       success: true,
       receivedQuantity: this.receivedQuantity,
       shippedQuantity: this.shippedQuantity,
-      availableQuantity: this.availableQuantity
+      availableQuantity: this.availableQuantity,
+      colors: this.colors,
+      sizes: this.sizes
     };
 
   } catch (error) {
@@ -141,6 +169,7 @@ InventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
     throw error;
   }
 };
+
 
 const Inventory = model('Inventory', InventorySchema);
 

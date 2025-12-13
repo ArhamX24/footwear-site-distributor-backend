@@ -503,64 +503,55 @@ const fetchArticleDetailsFromInventory = async (req, res) => {
       });
     }
 
-
-
-    // ✅ FIXED: Search by top-level articleId, not nested
+    // Find inventory by articleId and populate QRCode references
     const inventory = await Inventory.findOne({ 
       articleId: articleId.toString() 
-    }).populate('productId', 'name segment');
+    }).populate({
+      path: 'qrCodes.qrCodeId',
+      select: 'uniqueId status articleDetails colors sizes'
+    });
 
     if (!inventory) {
-
       return res.status(404).json({ 
         message: "No inventory found for this article ID",
         success: false 
       });
     }
 
-
-    // Aggregate data from items with status 'received'
+    // Aggregate colors and sizes from populated QR codes with 'received' status
     let allColors = new Set();
     let allSizes = new Set();
-    let receivedItems = 0;
-    let shippedItems = 0;
 
-    // Process all items in this inventory
-    inventory.items.forEach(item => {
-      // Collect colors from received items only
-      if (item.status === 'received' && item.articleDetails?.colors && Array.isArray(item.articleDetails.colors)) {
-        item.articleDetails.colors.forEach(color => {
-          if (color && color !== 'Unknown' && color.toLowerCase() !== 'unknown') {
-            allColors.add(color.toLowerCase());
-          }
-        });
-      }
+    // Process qrCodes array (only received items for colors/sizes)
+    inventory.qrCodes.forEach(qrEntry => {
+      if (qrEntry.status === 'received' && qrEntry.qrCodeId) {
+        const qrCode = qrEntry.qrCodeId;
+        
+        // Collect colors
+        if (qrCode.colors && Array.isArray(qrCode.colors)) {
+          qrCode.colors.forEach(color => {
+            if (color && color !== 'Unknown' && color.toLowerCase() !== 'unknown') {
+              allColors.add(color.toLowerCase());
+            }
+          });
+        }
 
-      // Collect sizes from received items only
-      if (item.status === 'received' && item.articleDetails?.sizes && Array.isArray(item.articleDetails.sizes)) {
-        item.articleDetails.sizes.forEach(size => {
-          if (size && size !== 0) {
-            allSizes.add(Number(size));
-          }
-        });
-      }
-
-      // Count items by status
-      if (item.status === 'received') {
-        receivedItems++;
-      } else if (item.status === 'shipped') {
-        shippedItems++;
+        // Collect sizes
+        if (qrCode.sizes && Array.isArray(qrCode.sizes)) {
+          qrCode.sizes.forEach(size => {
+            if (size && size !== 0) {
+              allSizes.add(Number(size));
+            }
+          });
+        }
       }
     });
-
-    // Calculate available stock
-    const totalAvailableStock = Math.max(0, receivedItems - shippedItems);
 
     // Convert Sets to sorted arrays
     const colors = Array.from(allColors).sort();
     const sizes = Array.from(allSizes).sort((a, b) => a - b);
 
-    // Helper function to format size range
+    // Format size range
     const formatSizeRange = (sizes) => {
       if (!sizes || sizes.length === 0) return 'N/A';
       if (sizes.length === 1) return sizes[0].toString();
@@ -575,26 +566,19 @@ const fetchArticleDetailsFromInventory = async (req, res) => {
         articleId: inventory.articleId,
         articleName: inventory.articleName || 'Unknown Article',
         segment: inventory.segment || 'Unknown',
-        variantName: inventory.variantName || 'Unknown',
+        articleImage: inventory.articleImage || null,
         colors: colors.length > 0 ? colors : [],
         sizes: sizes.length > 0 ? sizes : [],
         sizeRange: formatSizeRange(sizes),
-        availableStock: totalAvailableStock,
+        availableStock: inventory.availableQuantity,
         stockBreakdown: {
-          received: receivedItems,
-          shipped: shippedItems,
-          available: totalAvailableStock
+          received: inventory.receivedQuantity,
+          shipped: inventory.shippedQuantity,
+          available: inventory.availableQuantity
         },
-        productInfo: inventory.productId ? {
-          id: inventory.productId._id,
-          name: inventory.productId.name,
-          segment: inventory.productId.segment
-        } : null,
         lastUpdated: inventory.lastUpdated || inventory.updatedAt
       }
     };
-
-
 
     return res.status(200).json(response);
 
