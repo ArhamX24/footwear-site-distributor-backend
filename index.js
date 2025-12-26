@@ -27,6 +27,7 @@ const allowedOrigins = [
   "https://www.pinkeyfootwear.in",
   "https://pinkeyfootwear.netlify.app",
   "https://pinkey-demo.netlify.app",
+  "pinkey-demo.netlify.app",
   "http://localhost:5173",
   "http://localhost:3000",
 ];
