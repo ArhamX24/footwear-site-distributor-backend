@@ -864,7 +864,7 @@ const scanQRCode = async (req, res) => {
     }
 
     // ========== EVENT: SHIPPED (Shipment Scan) ==========
-// ========== EVENT: SHIPPED (Shipment Scan) ==========
+
 if (event === 'shipped') {
   if (qrCode.status === 'shipped') {
     return res.status(400).json({
