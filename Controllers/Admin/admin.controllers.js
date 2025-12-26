@@ -695,9 +695,7 @@ const scanQRCode = async (req, res) => {
   try {
     const { uniqueId } = req.params;
     const { event, notes, qualityCheck, distributorDetails, trackingNumber } = req.body;
-    
 
-    
     if (!req.user || !req.user.id) {
       return res.status(401).json({
         result: false,
@@ -705,7 +703,7 @@ const scanQRCode = async (req, res) => {
       });
     }
 
-    // ✅ Find QR by uniqueId or MongoDB _id
+    // Find QR by uniqueId or MongoDB _id
     let qrCode = await QRCode.findOne({ uniqueId });
     
     if (!qrCode && mongoose.Types.ObjectId.isValid(uniqueId)) {
@@ -713,20 +711,14 @@ const scanQRCode = async (req, res) => {
     }
 
     if (!qrCode) {
-
       return res.status(404).json({
         result: false,
         message: `QR code not found: ${uniqueId}`
       });
     }
 
-
-
-    const articleId = qrCode.contractorInput?.articleId || 
-                     qrCode.productReference?.articleId?.toString() || null;
-    const articleName = qrCode.contractorInput?.articleName || 
-                       qrCode.articleName || null;
-
+    const articleId = qrCode.contractorInput?.articleId || qrCode.productReference?.articleId?.toString() || null;
+    const articleName = qrCode.contractorInput?.articleName || qrCode.articleName || null;
 
     if (!articleId || !articleName) {
       return res.status(400).json({
@@ -757,14 +749,14 @@ const scanQRCode = async (req, res) => {
 
         const productData = await Product.aggregate([
           { $match: { _id: productId } },
-          { $unwind: '$variants' },
-          { $unwind: '$variants.articles' },
-          { $match: { 'variants.articles._id': objectId } },
+          { $unwind: "$variants" },
+          { $unwind: "$variants.articles" },
+          { $match: { "variants.articles._id": objectId } },
           {
             $project: {
-              segment: '$segment',
-              variantName: '$variants.name',
-              articleImage: '$variants.articles.image'
+              segment: "$segment",
+              variantName: "$variants.name",
+              articleImage: "$variants.articles.image"
             }
           },
           { $limit: 1 }
@@ -774,35 +766,55 @@ const scanQRCode = async (req, res) => {
           segment = productData[0].segment || 'Unknown';
           variantName = productData[0].variantName || 'Unknown';
           articleImage = productData[0].articleImage || null;
-          
-
         }
       } catch (err) {
-
+        console.error('❌ Error fetching product data:', err);
       }
     }
 
     // ========== EVENT: RECEIVED (Warehouse Scan) ==========
     if (event === 'received') {
-
-
+      // ✅ FIXED: Check current status before allowing warehouse receipt
       if (qrCode.status === 'received') {
-
         return res.status(400).json({
           result: false,
-          message: "This QR has already been received"
+          message: "This QR has already been received at the warehouse"
+        });
+      }
+
+      // ✅ NEW: Prevent re-receiving shipped items
+      if (qrCode.status === 'shipped') {
+        return res.status(400).json({
+          result: false,
+          message: "This QR code has already been shipped and cannot be received again. Please check the QR code."
+        });
+      }
+
+      // ✅ NEW: Prevent re-receiving delivered items
+      if (qrCode.status === 'delivered') {
+        return res.status(400).json({
+          result: false,
+          message: "This QR code has been delivered and cannot be received again."
+        });
+      }
+
+      // Only allow 'generated' or 'manufactured' status to be received
+      if (qrCode.status !== 'generated' && qrCode.status !== 'manufactured') {
+        return res.status(400).json({
+          result: false,
+          message: `Cannot receive QR with status '${qrCode.status}'. Only newly generated or manufactured QR codes can be received.`
         });
       }
 
       // Find or create inventory
       let inventory = await Inventory.findOne({ articleId: articleId.toString() });
 
-       if (!inventory) {
-    // ✅ FIXED: Include productId when creating new inventory
+      if (!inventory) {
+        // Create new inventory with productId
         inventory = new Inventory({
           articleId: articleId.toString(),
           articleName,
-          productId: productId || null,  // ✅ ADD THIS LINE
+          productId: productId || null,
           segment,
           articleImage,
           receivedQuantity: 0,
@@ -812,7 +824,7 @@ const scanQRCode = async (req, res) => {
         });
       }
 
-      
+      // Add scan record
       qrCode.scans.push({
         scannedAt: new Date(),
         scannedBy: req.user.id,
@@ -823,7 +835,10 @@ const scanQRCode = async (req, res) => {
       });
 
       qrCode.totalScans = (qrCode.totalScans || 0) + 1;
-      if (!qrCode.firstScannedAt) qrCode.firstScannedAt = new Date();
+      
+      if (!qrCode.firstScannedAt) {
+        qrCode.firstScannedAt = new Date();
+      }
       qrCode.lastScannedAt = new Date();
       qrCode.status = 'received';
 
@@ -840,9 +855,7 @@ const scanQRCode = async (req, res) => {
       };
 
       await qrCode.save();
-
       await inventory.syncWithQRCode(qrCode._id);
-      
 
       return res.status(200).json({
         result: true,
@@ -864,254 +877,263 @@ const scanQRCode = async (req, res) => {
     }
 
     // ========== EVENT: SHIPPED (Shipment Scan) ==========
-
-if (event === 'shipped') {
-  if (qrCode.status === 'shipped') {
-    return res.status(400).json({
-      result: false,
-      message: "This QR has already been shipped"
-    });
-  }
-
-  if (qrCode.status !== 'received') {
-    return res.status(400).json({
-      result: false,
-      message: "QR must be received at warehouse before shipping"
-    });
-  }
-
-  if (!distributorDetails || !distributorDetails.distributorId) {
-    return res.status(400).json({
-      result: false,
-      message: "Distributor details required"
-    });
-  }
-
-  // Get distributor
-  const distributor = await userModel.findById(distributorDetails.distributorId);
-  
-  if (!distributor) {
-    return res.status(404).json({
-      result: false,
-      message: "Distributor not found"
-    });
-  }
-
-  qrCode.scans.push({
-    scannedAt: new Date(),
-    scannedBy: req.user.id,
-    event,
-    notes: notes || '',
-    location: 'Shipping Dock',
-    distributorId: distributorDetails.distributorId
-  });
-
-  qrCode.totalScans = (qrCode.totalScans || 0) + 1;
-  qrCode.lastScannedAt = new Date();
-  qrCode.status = 'shipped';
-
-  await qrCode.save();
-
-  // ✅ Find or create shipment
-  let shipment = await Shipment.findOne({
-    distributorId: distributor._id,
-    status: { $in: ['pending', 'in_transit'] }
-  });
-
-  // ✅ CRITICAL FIX: Convert articleId to string for comparison
-  const articleIdString = articleId?.toString() || '';
-  
-  console.log(`🔍 [SHIPMENT] Searching for article: ${articleIdString} (${articleName})`);
-
-  if (!shipment) {
-    console.log('✅ [SHIPMENT] Creating NEW shipment');
-    
-    // ✅ Create new shipment
-    const shipmentId = `SHIP_${Date.now()}_${distributor._id.toString().slice(-6)}`;
-    
-    shipment = new Shipment({
-      shipmentId: shipmentId,
-      distributorId: distributor._id,
-      distributorName: distributor.distributorDetails?.partyName || distributor.name,
-      distributorPhoneNo: distributor.phoneNo,
-      distributorCity: distributor.distributorDetails?.cityName || distributor.distributorDetails?.city,
-      distributorTransport: distributor.distributorDetails?.transport,
-      distributorPartyName: distributor.distributorDetails?.partyName,
-      items: [{
-        qrCodes: [{
-          qrCodeId: qrCode._id,
-          uniqueId: qrCode.uniqueId,
-          cartonNumber: qrCode.contractorInput?.cartonNumber || 0,
-          scannedAt: new Date()
-        }],
-        articleName: qrCode.articleName || articleName,
-        articleImage: articleImage,
-        articleDetails: {
-          colors: qrCode.contractorInput?.colors || [],
-          sizes: qrCode.contractorInput?.sizes || []
-        },
-        productReference: {
-          productId: productId,
-          variantId: qrCode.productReference?.variantId,
-          articleId: articleId,
-          segment: segment,
-          variantName: variantName
-        },
-        quantity: 1
-      }],
-      shippedBy: {
-        userId: req.user.id,
-        userType: 'shipment_manager',
-        name: req.user.name || 'Shipment Manager',
-        phoneNo: req.user.phoneNo
-      },
-      shippedAt: new Date(),
-      totalCartons: 1,
-      status: 'in_transit',
-      trackingNumber: trackingNumber || `TRACK_${Date.now()}`,
-      notes: notes || `Shipment to ${distributor.distributorDetails?.partyName || distributor.name}`
-    });
-
-    console.log(`✅ [SHIPMENT] New shipment created with 1 item`);
-  } else {
-    console.log(`🔍 [SHIPMENT] Existing shipment found: ${shipment.shipmentId}`);
-    console.log(`📦 [SHIPMENT] Current items count: ${shipment.items.length}`);
-    
-    // ✅ CRITICAL FIX: Find existing article by matching articleId
-    let existingItemIndex = -1;
-    
-    for (let i = 0; i < shipment.items.length; i++) {
-      const item = shipment.items[i];
-      const itemArticleId = item.productReference?.articleId?.toString() || '';
-      
-      console.log(`   Comparing item ${i}: ${itemArticleId} === ${articleIdString}`);
-      
-      if (itemArticleId === articleIdString) {
-        existingItemIndex = i;
-        console.log(`✅ [SHIPMENT] MATCH FOUND at index ${i}!`);
-        break;
+    if (event === 'shipped') {
+      // ✅ Check if already shipped
+      if (qrCode.status === 'shipped') {
+        return res.status(400).json({
+          result: false,
+          message: "This QR has already been shipped"
+        });
       }
-    }
 
-    if (existingItemIndex !== -1) {
-      // ✅ Article exists - add QR code to existing item
-      console.log(`✅ [SHIPMENT] Adding to EXISTING article at index ${existingItemIndex}`);
+      // ✅ Check if already delivered
+      if (qrCode.status === 'delivered') {
+        return res.status(400).json({
+          result: false,
+          message: "This QR has already been delivered and cannot be shipped again"
+        });
+      }
+
+      // ✅ Must be received before shipping
+      if (qrCode.status !== 'received') {
+        return res.status(400).json({
+          result: false,
+          message: `QR must be received at warehouse before shipping. Current status: ${qrCode.status}`
+        });
+      }
+
+      if (!distributorDetails || !distributorDetails.distributorId) {
+        return res.status(400).json({
+          result: false,
+          message: "Distributor details required"
+        });
+      }
+
+      // Get distributor
+      const distributor = await userModel.findById(distributorDetails.distributorId);
       
-      shipment.items[existingItemIndex].qrCodes.push({
-        qrCodeId: qrCode._id,
-        uniqueId: qrCode.uniqueId,
-        cartonNumber: qrCode.contractorInput?.cartonNumber || 0,
-        scannedAt: new Date()
+      if (!distributor) {
+        return res.status(404).json({
+          result: false,
+          message: "Distributor not found"
+        });
+      }
+
+      qrCode.scans.push({
+        scannedAt: new Date(),
+        scannedBy: req.user.id,
+        event,
+        notes: notes || '',
+        location: 'Shipping Dock',
+        distributorId: distributorDetails.distributorId
       });
-      
-      // ✅ Increment quantity for this article
-      shipment.items[existingItemIndex].quantity += 1;
-      
-      console.log(`✅ [SHIPMENT] Article "${articleName}" now has ${shipment.items[existingItemIndex].quantity} cartons`);
-      console.log(`✅ [SHIPMENT] QR codes in this article: ${shipment.items[existingItemIndex].qrCodes.length}`);
-    } else {
-      // ✅ New article - create new item
-      console.log(`➕ [SHIPMENT] Adding NEW article: ${articleName}`);
-      
-      shipment.items.push({
-        qrCodes: [{
-          qrCodeId: qrCode._id,
-          uniqueId: qrCode.uniqueId,
-          cartonNumber: qrCode.contractorInput?.cartonNumber || 0,
-          scannedAt: new Date()
-        }],
-        articleName: qrCode.articleName || articleName,
-        articleImage: articleImage,
-        articleDetails: {
-          colors: qrCode.contractorInput?.colors || [],
-          sizes: qrCode.contractorInput?.sizes || []
-        },
-        productReference: {
-          productId: productId,
-          variantId: qrCode.productReference?.variantId,
-          articleId: articleId,
-          segment: segment,
-          variantName: variantName
-        },
-        quantity: 1
+
+      qrCode.totalScans = (qrCode.totalScans || 0) + 1;
+      qrCode.lastScannedAt = new Date();
+      qrCode.status = 'shipped';
+
+      await qrCode.save();
+
+      // Find or create shipment
+      let shipment = await Shipment.findOne({
+        distributorId: distributor._id,
+        status: { $in: ['pending', 'in_transit'] }
       });
+
+      // Convert articleId to string for comparison
+      const articleIdString = articleId?.toString() || '';
       
-      console.log(`✅ [SHIPMENT] New article added to shipment`);
-    }
-    
-    // ✅ Update total cartons (sum all quantities)
-    shipment.totalCartons = shipment.items.reduce((total, item) => total + item.quantity, 0);
-    
-    console.log(`📊 [SHIPMENT] Total unique articles: ${shipment.items.length}`);
-    console.log(`📊 [SHIPMENT] Total cartons: ${shipment.totalCartons}`);
-    
-    shipment.notes = `${shipment.notes || ''} | Added ${articleName}`.trim();
-  }
+      console.log(`🔍 [SHIPMENT] Searching for article: ${articleIdString} (${articleName})`);
 
-  // ✅ Mark items array as modified (important for Mongoose to save nested arrays)
-  shipment.markModified('items');
-  
-  await shipment.save();
+      if (!shipment) {
+        console.log('✅ [SHIPMENT] Creating NEW shipment');
+        
+        // Create new shipment
+        const shipmentId = `SHIP_${Date.now()}_${distributor._id.toString().slice(-6)}`;
+        
+        shipment = new Shipment({
+          shipmentId: shipmentId,
+          distributorId: distributor._id,
+          distributorName: distributor.distributorDetails?.partyName || distributor.name,
+          distributorPhoneNo: distributor.phoneNo,
+          distributorCity: distributor.distributorDetails?.cityName || distributor.distributorDetails?.city,
+          distributorTransport: distributor.distributorDetails?.transport,
+          distributorPartyName: distributor.distributorDetails?.partyName,
+          items: [{
+            qrCodes: [{
+              qrCodeId: qrCode._id,
+              uniqueId: qrCode.uniqueId,
+              cartonNumber: qrCode.contractorInput?.cartonNumber || 0,
+              scannedAt: new Date()
+            }],
+            articleName: qrCode.articleName || articleName,
+            articleImage: articleImage,
+            articleDetails: {
+              colors: qrCode.contractorInput?.colors || [],
+              sizes: qrCode.contractorInput?.sizes || []
+            },
+            productReference: {
+              productId: productId,
+              variantId: qrCode.productReference?.variantId,
+              articleId: articleId,
+              segment: segment,
+              variantName: variantName
+            },
+            quantity: 1
+          }],
+          shippedBy: {
+            userId: req.user.id,
+            userType: 'shipment_manager',
+            name: req.user.name || 'Shipment Manager',
+            phoneNo: req.user.phoneNo
+          },
+          shippedAt: new Date(),
+          totalCartons: 1,
+          status: 'in_transit',
+          trackingNumber: trackingNumber || `TRACK_${Date.now()}`,
+          notes: notes || `Shipment to ${distributor.distributorDetails?.partyName || distributor.name}`
+        });
 
-  console.log(`💾 [SHIPMENT] Shipment saved successfully`);
-
-  // Update QR code with shipment details
-  qrCode.shipmentDetails = {
-    shippedAt: new Date(),
-    shippedBy: {
-      userId: req.user.id,
-      userType: 'shipment_manager',
-      name: req.user.name || 'Shipment Manager'
-    },
-    distributorId: distributor._id,
-    distributorName: distributor.distributorDetails?.partyName || distributor.name,
-    shipmentId: shipment._id,
-    trackingNumber: shipment.trackingNumber,
-    notes: notes || ''
-  };
-
-  await qrCode.save();
-
-  // Update inventory
-  const inventory = await Inventory.findOne({ articleId: articleId.toString() });
-  
-  if (inventory) {
-    await inventory.syncWithQRCode(qrCode._id);
-  }
-
-  return res.status(200).json({
-    result: true,
-    message: "Shipment scan completed",
-    data: {
-      qrCode: {
-        uniqueId: qrCode.uniqueId,
-        articleName: qrCode.articleName,
-        status: qrCode.status,
-        articleDetails: {
-          colors: qrCode.contractorInput?.colors || [],
-          sizes: qrCode.contractorInput?.sizes || []
+        console.log(`✅ [SHIPMENT] New shipment created with 1 item`);
+      } else {
+        console.log(`🔍 [SHIPMENT] Existing shipment found: ${shipment.shipmentId}`);
+        console.log(`📦 [SHIPMENT] Current items count: ${shipment.items.length}`);
+        
+        // Find existing article by matching articleId
+        let existingItemIndex = -1;
+        
+        for (let i = 0; i < shipment.items.length; i++) {
+          const item = shipment.items[i];
+          const itemArticleId = item.productReference?.articleId?.toString() || '';
+          
+          console.log(`   Comparing item ${i}: ${itemArticleId} === ${articleIdString}`);
+          
+          if (itemArticleId === articleIdString) {
+            existingItemIndex = i;
+            console.log(`✅ [SHIPMENT] MATCH FOUND at index ${i}!`);
+            break;
+          }
         }
-      },
-      shipment: {
-        shipmentId: shipment.shipmentId,
-        distributorName: distributor.distributorDetails?.partyName || distributor.name,
-        trackingNumber: shipment.trackingNumber,
-        totalCartons: shipment.totalCartons,
-        totalArticles: shipment.items.length,
-        shippedAt: shipment.shippedAt,
-        items: shipment.items.map(item => ({
-          articleName: item.articleName,
-          articleId: item.productReference?.articleId?.toString(),
-          quantity: item.quantity,
-          qrCodesCount: item.qrCodes.length
-        }))
-      }
-    }
-  });
-}
 
+        if (existingItemIndex !== -1) {
+          // Article exists - add QR code to existing item
+          console.log(`✅ [SHIPMENT] Adding to EXISTING article at index ${existingItemIndex}`);
+          
+          shipment.items[existingItemIndex].qrCodes.push({
+            qrCodeId: qrCode._id,
+            uniqueId: qrCode.uniqueId,
+            cartonNumber: qrCode.contractorInput?.cartonNumber || 0,
+            scannedAt: new Date()
+          });
+          
+          // Increment quantity for this article
+          shipment.items[existingItemIndex].quantity += 1;
+          
+          console.log(`✅ [SHIPMENT] Article "${articleName}" now has ${shipment.items[existingItemIndex].quantity} cartons`);
+          console.log(`✅ [SHIPMENT] QR codes in this article: ${shipment.items[existingItemIndex].qrCodes.length}`);
+        } else {
+          // New article - create new item
+          console.log(`➕ [SHIPMENT] Adding NEW article: ${articleName}`);
+          
+          shipment.items.push({
+            qrCodes: [{
+              qrCodeId: qrCode._id,
+              uniqueId: qrCode.uniqueId,
+              cartonNumber: qrCode.contractorInput?.cartonNumber || 0,
+              scannedAt: new Date()
+            }],
+            articleName: qrCode.articleName || articleName,
+            articleImage: articleImage,
+            articleDetails: {
+              colors: qrCode.contractorInput?.colors || [],
+              sizes: qrCode.contractorInput?.sizes || []
+            },
+            productReference: {
+              productId: productId,
+              variantId: qrCode.productReference?.variantId,
+              articleId: articleId,
+              segment: segment,
+              variantName: variantName
+            },
+            quantity: 1
+          });
+          
+          console.log(`✅ [SHIPMENT] New article added to shipment`);
+        }
+        
+        // Update total cartons (sum all quantities)
+        shipment.totalCartons = shipment.items.reduce((total, item) => total + item.quantity, 0);
+        
+        console.log(`📊 [SHIPMENT] Total unique articles: ${shipment.items.length}`);
+        console.log(`📊 [SHIPMENT] Total cartons: ${shipment.totalCartons}`);
+        
+        shipment.notes = `${shipment.notes || ''} | Added ${articleName}`.trim();
+      }
+
+      // Mark items array as modified
+      shipment.markModified('items');
+      
+      await shipment.save();
+
+      console.log(`💾 [SHIPMENT] Shipment saved successfully`);
+
+      // Update QR code with shipment details
+      qrCode.shipmentDetails = {
+        shippedAt: new Date(),
+        shippedBy: {
+          userId: req.user.id,
+          userType: 'shipment_manager',
+          name: req.user.name || 'Shipment Manager'
+        },
+        distributorId: distributor._id,
+        distributorName: distributor.distributorDetails?.partyName || distributor.name,
+        shipmentId: shipment._id,
+        trackingNumber: shipment.trackingNumber,
+        notes: notes || ''
+      };
+
+      await qrCode.save();
+
+      // Update inventory
+      const inventory = await Inventory.findOne({ articleId: articleId.toString() });
+      
+      if (inventory) {
+        await inventory.syncWithQRCode(qrCode._id);
+      }
+
+      return res.status(200).json({
+        result: true,
+        message: "Shipment scan completed",
+        data: {
+          qrCode: {
+            uniqueId: qrCode.uniqueId,
+            articleName: qrCode.articleName,
+            status: qrCode.status,
+            articleDetails: {
+              colors: qrCode.contractorInput?.colors || [],
+              sizes: qrCode.contractorInput?.sizes || []
+            }
+          },
+          shipment: {
+            shipmentId: shipment.shipmentId,
+            distributorName: distributor.distributorDetails?.partyName || distributor.name,
+            trackingNumber: shipment.trackingNumber,
+            totalCartons: shipment.totalCartons,
+            totalArticles: shipment.items.length,
+            shippedAt: shipment.shippedAt,
+            items: shipment.items.map(item => ({
+              articleName: item.articleName,
+              articleId: item.productReference?.articleId?.toString(),
+              quantity: item.quantity,
+              qrCodesCount: item.qrCodes.length
+            }))
+          }
+        }
+      });
+    }
 
   } catch (error) {
+    console.error('❌ [SCAN] Error:', error);
     res.status(500).json({
       result: false,
       message: "Scan failed",
@@ -1119,6 +1141,7 @@ if (event === 'shipped') {
     });
   }
 };
+
 
 
 
