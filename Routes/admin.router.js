@@ -85,7 +85,7 @@ adminRouter.post("/register", register)
 .get("/distributor/get", getDistributors)
 .patch("/distributor/update/:id", updateDistributor)
 .delete("/distributor/delete/:id", deleteDistributor)
-routes
+
 // Order management 
 .get("/products/orders", getPurchases)
 .put("/products/orders/confirm/:id", markPurchaseConfirm)
