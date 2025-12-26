@@ -8,8 +8,6 @@ import {
     deleteDistributor, 
     generateOrderPerforma, 
     addFestivleImage, 
-    generateQRCodes, 
-    downloadQRCodes, 
     getQRStatistics, 
     scanQRCode, 
     getInventoryData, 
@@ -28,7 +26,10 @@ import {
     getShipmentDetails,
     getAllShipments,
     getUserDetails,
-    
+    getContractorMonthlyReport,
+    downloadContractorMonthlyReport,
+    getAllContractorsMonthlyReport,
+    downloadAllContractorsReport
 } from "../Controllers/Admin/admin.controllers.js";
 import { adminOnly } from "../MIddlewares/roleauth.middleware.js";
 import { 
@@ -55,6 +56,7 @@ import {
 } from '../Controllers/Admin/shipment.controllers.js'
 import upload from "../MIddlewares/multer.middleware.js";
 import multer from "multer";
+import { getAllDemand, getHighDemandReport, refreshAllDemand } from "../Controllers/Admin/demand.controllers.js";
 
 const uploadFormDetails = multer();
 
@@ -63,12 +65,11 @@ let adminRouter = express.Router();
 // Authentication routes
 adminRouter.post("/register", register)
 .get("/me", adminOnly, getAdmin)
-.post("/qr/generate", adminOnly, generateQRCodes)
 
 // Product management routes
 .post("/products/addproduct", upload.array('images', 10), addProduct)
 .delete("/products/deleteproduct/:productid", deleteProduct)
-.put("/products/updateproduct/:productid", upload.array('images', 10), updateProduct)
+.put("/products/updateproduct/", upload.array('images', 10), updateProduct)
 .get("/products/getproducts", getAllProducts)
 .post("/products/import-excel", upload.single('excel'), importProductsFromExcel)
 .get("/products/articles", getArticlesForDropdown)
@@ -87,7 +88,7 @@ adminRouter.post("/register", register)
 
 // Order management routes
 .get("/products/orders", getPurchases)
-.post("/products/orders/confirm/:id", markPurchaseConfirm)
+.put("/products/orders/confirm/:id", markPurchaseConfirm)
 .get("/orders/view-performa/:orderId", generateOrderPerforma)
 
 // Category management routes
@@ -97,9 +98,7 @@ adminRouter.post("/register", register)
 // Festival/promotional content routes
 .post("/festival/upload", upload.single('images'), addFestivleImage)
 
-// QR Code management routes
-.post("/qr/generate", adminOnly, generateQRCodes)
-.post("/qr/download", adminOnly, downloadQRCodes)
+
 .post("/qr/scan/:uniqueId", scanQRCode)
 .get("/qr/statistics", getQRStatistics)
 
@@ -140,5 +139,16 @@ adminRouter.post("/register", register)
 
 
 .get("/users/details/:id", adminOnly, getUserDetails)
+
+// QR Report
+.get('/report/contractor', adminOnly, getContractorMonthlyReport)
+.get('/download/:contractorId', adminOnly, downloadContractorMonthlyReport)
+.get('/report/all', adminOnly, getAllContractorsMonthlyReport)
+.get('/download-all/excel', adminOnly, downloadAllContractorsReport)
+
+.get('/demand', adminOnly, getAllDemand)
+.get('/demand/high', adminOnly, getHighDemandReport)
+.post('/demand/refresh', adminOnly, refreshAllDemand)  // Manual refresh
+
 
 export default adminRouter;

@@ -10,6 +10,7 @@ import purchaseProductModel from "../../Models/Purchasedproduct.model.js"
 import mongoose from "mongoose"
 import Inventory from "../../Models/Inventory.model.js"
 import Festive from "../../Models/Festivle.model.js"
+import { createDemandFromOrder } from "../Admin/demand.controllers.js"
 
 let cookieOption = {
     path: "/",
@@ -161,7 +162,16 @@ const purchaseProduct = async (req, res) => {
     });
 
     distributorUser.distributorDetails.purchases.push(newPurchaseOrder._id);
+
+
+    await newPurchaseOrder.save();
     await distributorUser.save();
+
+
+    
+    // ✅ HOTFIX: Create demand AFTER order saved
+    await createDemandFromOrder(items, newPurchaseOrder._id);
+
 
     res.status(201).json({
       result: true,
@@ -198,7 +208,7 @@ const getPastOrders = async (req, res) => {
       orders
     });
   } catch (error) {
-    console.error("Error fetching past orders:", error);
+    
     return res.status(500).json({
       result: false,
       message: "Error fetching past orders. Please try again later.",
@@ -386,7 +396,7 @@ const getAllProducts = async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Error in getAllProducts:", err);
+   
     res.status(500).json({
       result: false,
       message: "Error fetching products",
@@ -551,7 +561,7 @@ const fetchArticleDetailsFromInventory = async (req, res) => {
     return res.status(200).json(response);
 
   } catch (error) {
-    console.error('[INVENTORY] Error:', error);
+    
     return res.status(500).json({ 
       message: "Error fetching article details from inventory",
       success: false,
@@ -699,7 +709,7 @@ const searchProducts = async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Search error:", err);
+
     res.status(500).json({
       result: false,
       message: "Search failed",
@@ -769,7 +779,7 @@ const getCombinedOffers = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("Error fetching combined offers:", error);
+  
         return res.status(500).json({
             result: false,
             message: "Failed to fetch offers",

@@ -6,7 +6,7 @@ import userModel from "../../Models/user.model.js";
 import purchaseProductModel from "../../Models/Purchasedproduct.model.js";
 import finalOrderPerforma from "../../Utils/finalOrderPerforma.js";
 import Festive from "../../Models/Festivle.model.js";
-import { uploadOnCloudinary } from "../../Utils/cloudinary.js";
+import { uploadOnImgBB } from "../../Utils/imgbb.js";
 import QrCode from 'qrcode'
 import Inventory from "../../Models/Inventory.model.js";
 import QRCodeLib from 'qrcode';
@@ -26,6 +26,9 @@ import PDFDocument from 'pdfkit';
 import mongoose from "mongoose";
 import stream from "stream"
 import { promisify } from "util";
+import QRTracker from "../../Models/QRTracker.model.js";
+import ExcelJS from 'exceljs';
+import { Parser } from 'json2csv';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -84,95 +87,7 @@ let cookieOption = {
     sameSite: 'none'
   }
 
-const generateQRWithLabel = async (qrString, labelData) => {
-  try {
-    // First generate pure QR code
-    const qrCodeDataURL = await QRCodeLib.toDataURL(qrString, {
-      width: 200,
-      margin: 2,
-      color: {
-        dark: '#000000',
-        light: '#FFFFFF'
-      },
-      errorCorrectionLevel: 'M'
-    });
 
-    // Format sizes properly
-    let sizesText = 'N/A';
-    if (labelData.sizes) {
-      if (Array.isArray(labelData.sizes)) {
-        if (labelData.sizes.length === 1) {
-          sizesText = labelData.sizes[0].toString();
-        } else if (labelData.sizes.length > 1) {
-          const sorted = [...labelData.sizes].sort((a, b) => a - b);
-          sizesText = `${sorted[0]}X${sorted[sorted.length - 1]}`;
-        }
-      } else {
-        sizesText = labelData.sizes.toString();
-      }
-    }
-
-    // ✅ FIXED: Create canvas WITHOUT carton number (smaller height)
-    const canvas = createCanvas(280, 320); // Reduced from 350
-    const ctx = canvas.getContext('2d');
-
-    // White background
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(0, 0, 280, 320);
-
-    // Add labels at the top (NO CARTON NUMBER)
-    ctx.fillStyle = '#000000';
-    ctx.font = 'bold 14px Arial';
-    ctx.textAlign = 'center';
-
-    let yPos = 20;
-    
-    ctx.fillText(`Article: ${labelData.articleName}`, 140, yPos);
-    yPos += 20;
-    ctx.fillText(`Colors: ${labelData.colors}`, 140, yPos);
-    yPos += 20;
-    ctx.fillText(`Sizes: ${sizesText}`, 140, yPos);
-    yPos += 25;
-
-    // Add separator line
-    ctx.strokeStyle = '#cccccc';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(20, yPos);
-    ctx.lineTo(260, yPos);
-    ctx.stroke();
-
-    yPos += 15;
-
-    // Load and add QR code
-    const qrImage = await loadImage(qrCodeDataURL);
-    ctx.drawImage(qrImage, 40, yPos, 200, 200);
-
-    yPos += 210;
-
-    // Add footer text
-    ctx.font = '10px Arial';
-    ctx.fillStyle = '#666666';
-    ctx.fillText('Scan to track', 140, yPos);
-
-    // Convert to data URL
-    const finalImage = canvas.toDataURL('image/png');
-    return finalImage;
-    
-  } catch (error) {
-
-    // Fallback to pure QR
-    return await QRCodeLib.toDataURL(qrString, {
-      width: 200,
-      margin: 2,
-      color: {
-        dark: '#000000',
-        light: '#FFFFFF'
-      },
-      errorCorrectionLevel: 'M'
-    });
-  }
-};
 
 
 // ✅ Helper function to format sizes as range (add this at the top of your file)
@@ -370,46 +285,56 @@ const getAdmin = async (req,res) => {
 }
 
 const addFestivleImage = async (req, res) => {
-    try {
-        let { startDate, endDate } = req.body;
+  try {
+    let { startDate, endDate } = req.body;
+    startDate = new Date(startDate);
+    endDate = new Date(endDate);
 
-        startDate = new Date(startDate);
-        endDate = new Date(endDate);
-
-        if (!req.file || !req.file.path) {
-            return res.status(statusCodes.badRequest).send({ 
-                result: false, message: "Please Upload an Image" 
-            });
-        }
-
-        // ✅ Upload single image to Cloudinary
-        let uploadResult;
-        try {
-            uploadResult = await uploadOnCloudinary(req.file.path);
-        } catch (uploadError) {
-            return res.status(statusCodes.badRequest).send({ 
-                result: false, message: "Image Failed to Upload. Please Try Again Later" 
-            });
-        }
-
-        await Festive.create({
-            startDate,
-            endDate,
-            image: uploadResult.secure_url // ✅ Save Cloudinary URL in the database
-        });
-
-        return res.status(statusCodes.success).send({ 
-            result: true, message: "Festival Image Uploaded Successfully",
-            imageUrl: uploadResult.secure_url
-        });
-
-    } catch (error) {
-        return res.status(statusCodes.serverError).send({ 
-            result: false, message: "Error in Adding Festival Image. Please Try Again Later" 
-        });
+    if (!req.file || !req.file.path) {
+      return res.status(statusCodes.badRequest).send({
+        result: false,
+        message: 'Please Upload an Image'
+      });
     }
-};
 
+    // ✅ Upload single image to ImgBB
+    let uploadResult;
+    try {
+      uploadResult = await uploadOnImgBB(req.file.path);
+    } catch (uploadError) {
+      return res.status(statusCodes.badRequest).send({
+        result: false,
+        message: 'Image Failed to Upload. Please Try Again Later'
+      });
+    }
+
+    if (!uploadResult?.secure_url) {
+      return res.status(statusCodes.badRequest).send({
+        result: false,
+        message: 'Image upload failed'
+      });
+    }
+
+    await Festive.create({
+      startDate,
+      endDate,
+      image: uploadResult.secure_url // ✅ ImgBB URL
+    });
+
+    return res.status(statusCodes.success).send({
+      result: true,
+      message: 'Festival Image Uploaded Successfully',
+      imageUrl: uploadResult.secure_url
+    });
+
+  } catch (error) {
+    return res.status(statusCodes.serverError).send({
+      result: false,
+      message: 'Error in Adding Festival Image. Please Try Again Later',
+      error: error.message
+    });
+  }
+};
 const getFestivleImages = async (req, res) => {
     try {
         let festiveImages = await Festive.find({}, "image"); // ✅ Select only image field
@@ -539,162 +464,232 @@ try {
   }
 }
 
-const generateQRCodes = async (req, res) => {
-  try {
-    const { articleId, articleName, colors, sizes, numberOfQRs } = req.body;
-    const userId = req.user?.id;
 
-    if (!articleId || !articleName || !colors || !sizes || !numberOfQRs) {
+
+const getContractorMonthlyReport = async (req, res) => {
+  try {
+    const { contractorId, year, month } = req.query;
+
+    if (!contractorId || !year || !month) {
       return res.status(400).json({
         result: false,
-        message: 'All fields required'
+        message: 'Missing contractorId, year, or month'
       });
     }
 
-    // Get article data
-    const objectId = new mongoose.Types.ObjectId(articleId);
-    const articleData = await Product.aggregate([
-      { $unwind: '$variants' },
-      { $unwind: '$variants.articles' },
-      { $match: { 'variants.articles._id': objectId } },
-      {
-        $project: {
-          articleId: '$variants.articles._id',
-          articleName: '$variants.articles.name',
-          articleImage: '$variants.articles.image',
-          productId: '$_id',
-          variantId: '$variants._id',
-          variantName: '$variants.name',
-          segment: '$segment'
-        }
-      },
-      { $limit: 1 }
-    ]);
+    const report = await QRTracker.getMonthlyReport(
+      contractorId,
+      parseInt(year),
+      parseInt(month)
+    );
 
-    if (!articleData.length) {
-      return res.status(404).json({
-        result: false,
-        message: 'Article not found'
-      });
-    }
-
-    const article = articleData[0];
-    const colorsArray = Array.isArray(colors) ? colors : [colors];
-    const sizesArray = Array.isArray(sizes) ? sizes.map(s => parseInt(s)) : [parseInt(sizes)];
-    const batchId = `BATCH_${Date.now()}`;
-    const qrCodes = [];
-
-    // ✅ FIXED: Generate QR codes with cartonNumber and totalCartons
-    for (let i = 1; i <= numberOfQRs; i++) {
-      const uniqueId = uuidv4();
-
-      const qrData = {
-        uniqueId,
-        articleName,
-        contractorInput: {
-          articleName,
-          articleId: article.articleId.toString(), // Convert to string
-          colors: colorsArray,
-          sizes: sizesArray,
-          cartonNumber: i,  // ✅ FIXED: Add carton number (1, 2, 3...)
-          totalCartons: numberOfQRs  // ✅ FIXED: Add total cartons
-        },
-        batchId,
-        status: 'generated'
-      };
-
-      const qrString = JSON.stringify(qrData);
-
-      // Generate QR with label (NO carton number on label)
-      const qrCodeImage = await generateQRWithLabel(qrString, {
-        articleName,
-        colors: colorsArray.join(', '),
-        sizes: sizesArray
-      });
-
-      // ✅ FIXED: Save to DB with proper ObjectId and required fields
-      const qrDoc = new QRCode({
-        uniqueId,
-        articleName,
-        qrData: qrString,
-        qrImagePath: qrCodeImage,
-        status: 'generated',
-        productReference: {
-          productId: article.productId,
-          variantId: article.variantId,
-          articleId: article.articleId,
-          variantName: article.variantName,
-          articleName: article.articleName,
-          isMatched: true,
-          matchedBy: new mongoose.Types.ObjectId(userId), // ✅ FIXED: Convert to ObjectId
-          matchedAt: new Date()
-        },
-        batchInfo: {
-          contractorId: new mongoose.Types.ObjectId(userId), // ✅ FIXED: Convert to ObjectId
-          batchId
-        },
-        contractorInput: {
-          articleName,
-          articleId: article.articleId.toString(),
-          colors: colorsArray,
-          sizes: sizesArray,
-          cartonNumber: i,  // ✅ FIXED: Required field
-          totalCartons: numberOfQRs  // ✅ FIXED: Required field
-        },
-        manufacturingDetails: {
-          manufacturedAt: new Date(),
-          manufacturedBy: {
-            userId: new mongoose.Types.ObjectId(userId), // ✅ FIXED: Convert to ObjectId
-            userType: 'contractor',
-            name: req.user?.name
-          }
-        }
-      });
-
-      await qrDoc.save();
-
-      qrCodes.push({
-        uniqueId,
-        qrCodeImage,
-        cartonNumber: i,  // ✅ Include carton number in response
-        labelInfo: {
-          articleName,
-          colors: colorsArray.join(', '),
-          sizes: sizesArray.length === 1 ? sizesArray[0] : `${Math.min(...sizesArray)}X${Math.max(...sizesArray)}`
-        }
-      });
-    }
-
-    res.json({
+    res.status(200).json({
       result: true,
-      message: `Generated ${numberOfQRs} QR codes`,
-      data: {
-        batchId,
-        qrCodes,
-        articleInfo: {
-          articleId: article.articleId,
-          articleName: article.articleName,
-          articleImage: article.articleImage,
-          productId: article.productId,
-          variantId: article.variantId,
-          variantName: article.variantName,
-          segment: article.segment,
-          colors: colorsArray,
-          sizes: sizesArray,
-          numberOfQRs
-        }
-      }
+      message: 'Monthly report fetched',
+      data: report
     });
-
   } catch (error) {
-
     res.status(500).json({
       result: false,
-      message: 'QR generation failed',
+      message: 'Failed to fetch report',
       error: error.message
     });
   }
 };
+
+
+const downloadContractorMonthlyReport = async (req, res) => {
+  try {
+    const { contractorId } = req.params;
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1;
+
+    const report = await QRTracker.getMonthlyReport(contractorId, year, month);
+
+    if (!report || report.length === 0) {
+      return res.status(404).json({
+        result: false,
+        message: 'No QR generation data found for this month'
+      });
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('QR Generation Report');
+
+    // ✅ UPDATED: Add 3 new columns
+    worksheet.columns = [
+      { header: 'Date', key: 'date', width: 12 },
+      { header: 'Article Name', key: 'articleName', width: 20 },
+      { header: 'Segment', key: 'segment', width: 12 },
+      { header: 'QR Generated', key: 'qrGeneratedCount', width: 12 },
+      { header: 'Bharra', key: 'bharra', width: 12 },
+      { header: 'Printing', key: 'printing', width: 12 },
+      { header: 'Packing', key: 'packing', width: 12 }
+    ];
+
+    // Style header row
+    const headerRow = worksheet.getRow(1);
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4B5563' } };
+    headerRow.alignment = { horizontal: 'center', vertical: 'center' };
+
+    // Add data rows
+    let totalQRs = 0;
+    report.forEach((item) => {
+      worksheet.addRow({
+        date: new Date(item.date).toLocaleDateString('en-IN'),
+        articleName: item.articleName,
+        segment: item.segment || 'N/A',
+        qrGeneratedCount: item.qrGeneratedCount,
+        bharra: item.bharra || 'N/A',
+        printing: item.printing || 'N/A',
+        packing: item.packing || 'N/A'
+      });
+      totalQRs += item.qrGeneratedCount;
+    });
+
+    // Add total row
+    const totalRow = worksheet.addRow({
+      date: 'TOTAL',
+      articleName: '',
+      segment: '',
+      qrGeneratedCount: totalQRs,
+      bharra: '',
+      printing: '',
+      packing: ''
+    });
+    totalRow.font = { bold: true };
+    totalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFCCCCCC' } };
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="QR-Report-${year}-${month.toString().padStart(2, '0')}.xlsx"`
+    );
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    console.error('Error generating Excel:', error);
+    res.status(500).json({
+      result: false,
+      message: 'Failed to generate report',
+      error: error.message
+    });
+  }
+};
+;
+
+
+const getAllContractorsMonthlyReport = async (req, res) => {
+  try {
+    const report = await QRTracker.getCurrentMonthReport();
+
+    res.status(200).json({
+      result: true,
+      message: 'All contractors monthly report fetched',
+      data: report
+    });
+  } catch (error) {
+    res.status(500).json({
+      result: false,
+      message: 'Failed to fetch all contractors report',
+      error: error.message
+    });
+  }
+};
+
+
+const downloadAllContractorsReport = async (req, res) => {
+  try {
+    const report = await QRTracker.getCurrentMonthReport();
+
+    if (!report || report.length === 0) {
+      return res.status(404).json({
+        result: false,
+        message: 'No QR generation data found for this month'
+      });
+    }
+
+    const workbook = new ExcelJS.Workbook();
+
+    report.forEach((contractorData) => {
+      const worksheet = workbook.addWorksheet(
+        contractorData.contractorName.substring(0, 31)
+      );
+
+      // ✅ UPDATED: Add 3 new columns
+      worksheet.columns = [
+        { header: 'Date', key: 'date', width: 12 },
+        { header: 'Article Name', key: 'articleName', width: 20 },
+        { header: 'Segment', key: 'segment', width: 12 },
+        { header: 'QR Generated', key: 'qrGeneratedCount', width: 12 },
+        { header: 'Bharra', key: 'bharra', width: 12 },
+        { header: 'Printing', key: 'printing', width: 12 },
+        { header: 'Packing', key: 'packing', width: 12 }
+      ];
+
+      // Style header row
+      const headerRow = worksheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4B5563' } };
+      headerRow.alignment = { horizontal: 'center', vertical: 'center' };
+
+      // Add contractor info
+      const infoRow = worksheet.addRow({});
+      worksheet.mergeCells(`A${infoRow.number}:G${infoRow.number}`);
+      infoRow.getCell('A').value = `Contractor: ${contractorData.contractorName}`;
+      infoRow.font = { bold: true, size: 12 };
+      infoRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E8E8' } };
+
+      // Add data rows
+      contractorData.records.forEach((record) => {
+        worksheet.addRow({
+          date: new Date(record.date).toLocaleDateString('en-IN'),
+          articleName: record.articleName,
+          segment: record.segment || 'N/A',
+          qrGeneratedCount: record.qrGeneratedCount,
+          bharra: record.bharra || 'N/A',
+          printing: record.printing || 'N/A',
+          packing: record.packing || 'N/A'
+        });
+      });
+
+      // Add total row
+      const totalRow = worksheet.addRow({
+        date: 'TOTAL',
+        articleName: '',
+        segment: '',
+        qrGeneratedCount: contractorData.totalQRs,
+        bharra: '',
+        printing: '',
+        packing: ''
+      });
+      totalRow.font = { bold: true };
+      totalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFCCCCCC' } };
+
+      worksheet.addRow({});
+    });
+
+    const now = new Date();
+    const fileName = `QR-Report-All-${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    console.error('Error generating Excel:', error);
+    res.status(500).json({
+      result: false,
+      message: 'Failed to generate report',
+      error: error.message
+    });
+  }
+};
+
 
 const scanQRCode = async (req, res) => {
   try {
@@ -1050,70 +1045,7 @@ const scanQRCode = async (req, res) => {
   }
 };
 
-const downloadQRCodes = async (req, res) => {
-    try {
-        const { batchId, articleInfo } = req.query; // Get metadata from query params
 
-        // Set response headers for streaming a zip file
-        res.setHeader('Content-Type', 'application/zip');
-        res.setHeader(
-            'Content-Disposition',
-            `attachment; filename="QR_Codes_${batchId || 'Batch'}_${Date.now()}.zip"`
-        );
-
-        const archive = archiver('zip', { zlib: { level: 9 } });
-
-        // Handle potential errors during archiving
-        archive.on('error', (err) => {
-            res.status(500).send({ error: 'Failed to create zip archive' });
-        });
-
-        // Pipe the archive stream directly to the response
-        archive.pipe(res);
-
-        // Process the incoming stream of QR code data
-        let qrCounter = 0;
-        const qrStream = new stream.Transform({
-            transform(chunk, encoding, callback) {
-                try {
-                    // Assuming each chunk is a JSON string of a QR code object
-                    const qrData = JSON.parse(chunk.toString());
-                    
-                    if (qrData.qrCodeImage) {
-                        const base64Data = qrData.qrCodeImage.replace(/^data:image\/png;base64,/, '');
-                        const buffer = Buffer.from(base64Data, 'base64');
-                        
-                        const cartonNum = qrData.cartonNumber || qrCounter++;
-                        const uniqueId = qrData.uniqueId || `qr_${qrCounter}`;
-                        
-                        const fileName = `QR_${articleInfo?.savedAsArticleName || 'Article'}_Carton_${String(cartonNum).padStart(3, '0')}_${uniqueId.slice(0, 8)}.png`;
-                        
-                        // Add QR code to the archive
-                        archive.append(buffer, { name: fileName });
-                    }
-                    callback();
-                } catch (error) {
-                    callback(error);
-                }
-            }
-        });
-
-        // Set up the pipeline: request -> qrStream (transform)
-        await pipeline(req, qrStream);
-
-        // Finalize the archive after the stream has been fully processed
-        await archive.finalize();
-
-    } catch (error) {
-        if (!res.headersSent) {
-            res.status(500).json({
-                result: false,
-                message: 'Failed to download QR codes',
-                error: error.message
-            });
-        }
-    }
-};
 
 const updateInventoryFromQRScan = async (qrCode, user, qualityCheck = null, notes = '') => {
     const productId = qrCode.productReference?.productId;
@@ -1139,7 +1071,7 @@ const updateInventoryFromQRScan = async (qrCode, user, qualityCheck = null, note
     return inventory;
 };
 
-// ✅ Updated shipment function for your workflow
+
 const updateInventoryOnShipment = async (qrCode, user, distributorDetails) => {
   try {
     const articleNameFromQR = qrCode.contractorInput?.articleName || qrCode.articleName || 'Unknown';
@@ -1246,7 +1178,6 @@ const getInventoryData = async (req, res) => {
   }
 };
 
-// ✅ Controller to get inventory stats for dashboard
 const getInventoryStats = async (req, res) => {
   try {
     const inventories = await Inventory.find({});
@@ -2233,9 +2164,6 @@ const createOrUpdateShipment = async (qrCode, user, distributorDetails) => {
     return shipment;
 };
 
-
-
-// ✅ NEW: Function to manually update inventory after shipment
 const updateInventoryAfterShipment = async (qrCode) => {
   try {
 
@@ -2294,7 +2222,6 @@ const updateInventoryAfterShipment = async (qrCode) => {
   }
 }
 
-// ✅ NEW: Function to manually complete shipment
 const completeShipment = async (req, res) => {
   try {
     const { shipmentId } = req.params;
@@ -2333,9 +2260,6 @@ const completeShipment = async (req, res) => {
   }
 };
 
-
-
-// Enhanced controller method for getting shipment details with article images
 const getShipmentDetails = async (req, res) => {
   try {
     const { shipmentId } = req.params;
@@ -2447,9 +2371,6 @@ const getAllShipments = async (req, res) => {
   }
 };
 
-
-
-// Get All Users by Role
 const getUsersByRole = async (req, res) => {
   try {
     const { role } = req.params;
@@ -2676,105 +2597,6 @@ const getInventoryByArticleId = async (req, res) => {
   }
 };
 
-const generateReceiptPdf = async (req, res) => {
-  try {
-    const { qrCodes, articleInfo } = req.body;
-    const contractorInfo = req.user; // ✅ Get contractor info from authenticated user
-    
-    if (!qrCodes || qrCodes.length === 0) {
-      return res.status(400).json({
-        result: false,
-        message: 'No QR codes provided for receipt'
-      });
-    }
-
-    if (!articleInfo) {
-      return res.status(400).json({
-        result: false,
-        message: 'Article info is required'
-      });
-    }
-
-    // Create PDF document
-    const doc = new PDFDocument({ size: 'A4', margin: 50 });
-
-    // Set response headers
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader(
-      'Content-Disposition', 
-      `attachment; filename=QR_Receipt_${articleInfo.savedAsArticleName.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.pdf`
-    );
-
-    // Pipe PDF to response
-    doc.pipe(res);
-
-    // ✅ Header
-    doc.fontSize(22).text('QR Code Generation Receipt', { align: 'center' });
-    doc.moveDown(1.5);
-
-    // ✅ Contractor Details Section (Fixed positioning)
-    const contractorBoxY = doc.y;
-    doc.rect(50, contractorBoxY, 500, 60).stroke();
-    doc.fontSize(16).text('Contractor Details', 60, contractorBoxY + 10);
-    doc.fontSize(12)
-       .text(`Name: ${contractorInfo.name || 'N/A'}`, 60, contractorBoxY + 30)
-       .text(`Phone No: ${contractorInfo.phoneNo || 'N/A'}`, 60, contractorBoxY + 45);
-    
-    // Move cursor after contractor box
-    doc.y = contractorBoxY + 70;
-    doc.moveDown(1);
-
-    // ✅ Article Details Section (Fixed positioning and data access)
-    const articleBoxY = doc.y;
-    doc.rect(50, articleBoxY, 500, 100).stroke();
-    doc.fontSize(16).text('Article Details', 60, articleBoxY + 10);
-    
-    // ✅ Fixed data access and size formatting
-    const articleName = articleInfo.savedAsArticleName || articleInfo.contractorInput || 'N/A';
-    const colors = Array.isArray(articleInfo.colors) ? articleInfo.colors.join(', ') : (articleInfo.colors || 'N/A');
-    
-    // ✅ Use helper function to format sizes as range (3X6 format)
-    const sizesDisplay = formatSizeRange(articleInfo.sizes);
-    
-    doc.fontSize(12)
-       .text(`Article Name: ${articleName}`, 60, articleBoxY + 30)
-       .text(`Colors: ${colors}`, 60, articleBoxY + 45)
-       .text(`Sizes: ${sizesDisplay}`, 60, articleBoxY + 60) // ✅ Now shows 3X6 format
-       .text(`Number of Cartons: ${articleInfo.numberOfQRs || qrCodes.length}`, 60, articleBoxY + 75);
-
-    // Move cursor after article box
-    doc.y = articleBoxY + 110;
-    doc.moveDown(1);
-
-    // ✅ Generation Info
-    doc.fontSize(10)
-       .text(`Generated on: ${new Date().toLocaleString()}`, 50)
-       .text(`Batch ID: ${qrCodes[0]?.batchId || 'N/A'}`, 50);
-
-    doc.moveDown(2);
-
-    // ✅ Footer
-    doc.fontSize(10).text(
-      'This receipt confirms the generation of QR codes for the specified article batch.',
-      50,
-      doc.page.height - 100,
-      { 
-        align: 'center',
-        width: 500
-      }
-    );
-
-    // Finalize PDF
-    doc.end();
-
-  } catch (error) {
-    res.status(500).json({
-      result: false,
-      message: 'Failed to generate receipt PDF',
-      error: error.message
-    });
-  }
-};
 
 const generateShipmentReceiptPDF = async (req, res) => {
   try {
@@ -3294,14 +3116,13 @@ export { getQRCodeById };
 
 
 
-export {register, login, getAdmin, addDistributor, deleteDistributor, getDistributors, updateDistributor, generateOrderPerforma, addFestivleImage, getFestivleImages, generateQRCodes, downloadQRCodes, scanQRCode, getQRStatistics, getInventoryData, getSingleProductInventory, getAllInventory, addContractor, addWarehouseManager, addShipmentManager,
+export {register, login, getAdmin, addDistributor, deleteDistributor, getDistributors, updateDistributor, generateOrderPerforma, addFestivleImage, getFestivleImages, scanQRCode, getQRStatistics, getInventoryData, getSingleProductInventory, getAllInventory, addContractor, addWarehouseManager, addShipmentManager,
 getContractors,
   getWarehouseManagers,
   getShipmentManagers,
   updateUserStats,
   deleteUser,
   getUsersByRole,
-  generateReceiptPdf,
   generateShipmentReceiptPDF,
   getInventoryStats,
   createOrUpdateShipment,
@@ -3309,6 +3130,9 @@ getContractors,
   getAllShipments,
   generateShipmentReceipt,
   getInventoryByArticleId,
-  generateQRWithLabel,
   generateWarehouseReceiptPDF,
-  getUserDetails}
+  getUserDetails,
+  getContractorMonthlyReport,
+  downloadContractorMonthlyReport,
+  getAllContractorsMonthlyReport,
+  downloadAllContractorsReport}

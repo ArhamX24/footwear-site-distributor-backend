@@ -84,9 +84,63 @@ const InventorySchema = new Schema({
   autoIndex: false
 });
 
+// Add this method to your InventorySchema.methods
+InventorySchema.methods.updateDemand = async function() {
+  try {
+    const Demand = mongoose.model('Demand');
+    
+    // Update ALL demands for this articleId with new stock
+    const updatedDemand = await Demand.findOneAndUpdate(
+      { articleId: this.articleId },
+      { 
+        availableStock: this.availableQuantity,
+        lastStockUpdate: new Date()
+      },
+      { new: true }
+    );
+
+
+  } catch (error) {
+    console.error('Demand sync error:', error);
+  }
+};
+
+// ✅ Add this METHOD to InventorySchema.methods
+InventorySchema.methods.syncDemand = async function() {
+  try {
+    const Demand = mongoose.model('Demand');
+    const demand = await Demand.findOne({ articleId: this.articleId });
+    
+    if (demand) {
+      // ✅ AUTO UPDATE demand with new stock
+      const newDemand = Math.max(0, demand.totalOrdered - this.availableQuantity);
+      demand.availableStock = this.availableQuantity;
+      demand.demand = newDemand;
+      demand.lastStockUpdate = new Date();
+      await demand.save();
+      
+
+    }
+  } catch (error) {
+    console.error('Demand sync failed:', error);
+  }
+};
+
+// ✅ AUTO-TRIGGER on EVERY inventory save
+InventorySchema.post('save', function(doc) {
+  doc.syncDemand();
+});
+
+
+// ✅ HOOK: Auto-run on EVERY inventory save
+InventorySchema.post('save', async function() {
+  await this.updateDemand();
+});
+
+
 // Updated syncWithQRCode method
 InventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
-  console.log(`[INVENTORY] Syncing with QR: ${qrCodeId}`);
+
 
   try {
     const QRCode = mongoose.model('QRCode');
@@ -153,7 +207,11 @@ InventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
     this.lastUpdated = new Date();
 
     await this.save();
-    console.log('[INVENTORY] ✅ Saved with colors:', this.colors, 'sizes:', this.sizes);
+
+    const Demand = mongoose.model('Demand');
+    await Demand.updateDemandFromInventory(this.articleId, this.availableQuantity);
+
+    await this.updateDemand();
 
     return {
       success: true,
@@ -165,7 +223,7 @@ InventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
     };
 
   } catch (error) {
-    console.error('[INVENTORY] ❌ Error:', error);
+   
     throw error;
   }
 };
