@@ -5,7 +5,7 @@ import { scanQRCode, getInventoryData, getQRCodeById} from "../Controllers/Admin
 const warehouseRouter = express.Router();
 
 warehouseRouter.post("/scan/:uniqueId", warehouseOnly, scanQRCode);
-warehouseRouter.get("/inventory", warehouseOnly, getInventoryData)
+warehouseRouter.get("/inventory/:productid", warehouseOnly, getInventoryData)
 .get('/qr/:qrId', getQRCodeById)
 // warehouseRouter.get("/dashboard", warehouseOnly, getWarehouseDashboard);
 

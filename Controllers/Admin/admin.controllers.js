@@ -1118,27 +1118,32 @@ const getInventoryData = async (req, res) => {
     
     let query = {};
     if (productId && productId !== 'all') {
-      query.productId = productId;
+      query.productId = productId;  // ✅ Now matches schema
     }
 
     const inventories = await Inventory.find(query)
-      .populate('productId', 'segment variants')
+      // ✅ FIXED: Safe population with strictPopulate: false
+      .populate({
+        path: 'productId',
+        select: 'segment variants',
+        strictPopulate: false  // ✅ Allows missing fields
+      })
       .populate('items.manufacturedBy', 'name phoneNo')
       .populate('items.receivedBy', 'name phoneNo') 
       .populate('items.shippedBy', 'name phoneNo')
       .populate('items.distributorId', 'name phoneNo distributorDetails')
       .sort({ lastUpdated: -1 });
 
-    // ✅ Format response with detailed breakdown
+    // ✅ SAFE data formatting (handle missing productId)
     const inventoryData = inventories.map(inventory => ({
-      productId: inventory.productId._id,
-      product: inventory.productId,
+      productId: inventory.productId?._id || null,
+      product: inventory.productId || null,
       summary: {
-        totalQuantity: inventory.totalQuantity,
-        availableQuantity: inventory.availableQuantity,
-        stages: inventory.quantityByStage
+        totalQuantity: inventory.totalQuantity || 0,
+        availableQuantity: inventory.availableQuantity || 0,
+        stages: inventory.quantityByStage || {}
       },
-      items: inventory.items.map(item => ({
+      items: inventory.items?.map(item => ({
         qrCodeId: item.qrCodeId,
         uniqueId: item.uniqueId,
         articleName: item.articleName,
@@ -1150,13 +1155,13 @@ const getInventoryData = async (req, res) => {
           shipped: item.shippedAt
         },
         users: {
-          manufacturedBy: item.manufacturedBy,
-          receivedBy: item.receivedBy,
-          shippedBy: item.shippedBy
+          manufacturedBy: item.manufacturedBy || null,
+          receivedBy: item.receivedBy || null,
+          shippedBy: item.shippedBy || null
         },
-        distributor: item.distributorId,
+        distributor: item.distributorId || null,
         notes: item.notes
-      })),
+      })) || [],
       lastUpdated: inventory.lastUpdated
     }));
 
@@ -1170,6 +1175,7 @@ const getInventoryData = async (req, res) => {
     });
 
   } catch (error) {
+    console.error('❌ Inventory fetch error:', error);
     res.status(500).json({
       result: false,
       message: 'Failed to fetch inventory data',
@@ -1177,6 +1183,7 @@ const getInventoryData = async (req, res) => {
     });
   }
 };
+
 
 const getInventoryStats = async (req, res) => {
   try {

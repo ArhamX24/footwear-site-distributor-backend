@@ -5,80 +5,41 @@ const { Schema, model } = mongoose;
 
 // Models/Inventory.model.js
 const InventorySchema = new Schema({
-  articleId: {
-    type: String,
+  // ✅ PRIMARY KEY (QR/article level)
+  articleId: { type: String, required: true, unique: true },
+  articleName: { type: String, required: true },
+  
+  // ✅ PRODUCT REFERENCE (for grouping)
+  productId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Product',
     required: true,
-    unique: true
-  },
-  articleName: {
-    type: String,
-    required: true
-  },
-  segment: {
-    type: String,
-    default: 'Unknown'
-  },
-  articleImage: {
-    type: String,
-    default: null
+    index: true  // Speed up queries
   },
   
-  // ✅ ADD THESE FIELDS
-  colors: {
-    type: [String],
-    default: []
-  },
-  sizes: {
-    type: [Number],
-    default: []
-  },
+  segment: { type: String, default: 'Unknown' },
+  articleImage: { type: String, default: null },
   
-  receivedQuantity: {
-    type: Number,
-    default: 0,
-    min: 0
-  },
-  shippedQuantity: {
-    type: Number,
-    default: 0,
-    min: 0
-  },
-  availableQuantity: {
-    type: Number,
-    default: 0,
-    min: 0
-  },
+  // Colors & Sizes (from QR data)
+  colors: { type: [String], default: [] },
+  sizes: { type: [Number], default: [] },
   
+  // Quantities
+  receivedQuantity: { type: Number, default: 0, min: 0 },
+  shippedQuantity: { type: Number, default: 0, min: 0 },
+  availableQuantity: { type: Number, default: 0, min: 0 },
+  
+  // QR Code tracking
   qrCodes: [{
     _id: false,
-    qrCodeId: {
-      type: Schema.Types.ObjectId,
-      ref: 'QRCode',
-      required: true
-    },
-    uniqueId: {
-      type: String,
-      required: true
-    },
-    status: {
-      type: String,
-      enum: ['received', 'shipped'],
-      default: 'received'
-    },
-    receivedAt: {
-      type: Date,
-      default: Date.now
-    },
-    shippedAt: {
-      type: Date,
-      default: null
-    }
+    qrCodeId: { type: Schema.Types.ObjectId, ref: 'QRCode', required: true },
+    uniqueId: { type: String, required: true },
+    status: { type: String, enum: ['received', 'shipped'], default: 'received' },
+    receivedAt: { type: Date, default: Date.now },
+    shippedAt: { type: Date, default: null }
   }],
   
-  lastUpdated: {
-    type: Date,
-    default: Date.now
-  }
+  lastUpdated: { type: Date, default: Date.now }
 }, {
   timestamps: true,
   autoIndex: false
