@@ -4,15 +4,13 @@ import mongoose from 'mongoose';
 const { Schema, model } = mongoose;
 
 const InventorySchema = new Schema({
-  // ✅ PRIMARY KEY (QR/article level)
   articleId: { type: String, required: true, unique: true },
   articleName: { type: String, required: true },
   
-  // ✅ PRODUCT REFERENCE (for grouping) - MADE OPTIONAL
   productId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Product',
-    required: false,  // ✅ CHANGED: Made optional to prevent errors
+    required: false,
     default: null,
     index: true
   },
@@ -20,16 +18,13 @@ const InventorySchema = new Schema({
   segment: { type: String, default: 'Unknown' },
   articleImage: { type: String, default: null },
   
-  // Colors & Sizes (from QR data)
   colors: { type: [String], default: [] },
   sizes: { type: [Number], default: [] },
   
-  // Quantities
   receivedQuantity: { type: Number, default: 0, min: 0 },
   shippedQuantity: { type: Number, default: 0, min: 0 },
   availableQuantity: { type: Number, default: 0, min: 0 },
   
-  // QR Code tracking
   qrCodes: [{
     _id: false,
     qrCodeId: { type: Schema.Types.ObjectId, ref: 'QRCode', required: true },
@@ -45,53 +40,37 @@ const InventorySchema = new Schema({
   autoIndex: false
 });
 
-// Add this method to your InventorySchema.methods
+// ✅ FIXED: Simple updateDemand method without aggregation operators
 InventorySchema.methods.updateDemand = async function() {
   try {
     const Demand = mongoose.model('Demand');
     
-    // Update ALL demands for this articleId with new stock
-    const updatedDemand = await Demand.findOneAndUpdate(
-      { articleId: this.articleId },
-      { 
-        availableStock: this.availableQuantity,
-        lastStockUpdate: new Date()
-      },
-      { new: true }
-    );
-
-  } catch (error) {
-    console.error('Demand sync error:', error);
-  }
-};
-
-// ✅ Add this METHOD to InventorySchema.methods
-InventorySchema.methods.syncDemand = async function() {
-  try {
-    const Demand = mongoose.model('Demand');
+    // Find the demand record
     const demand = await Demand.findOne({ articleId: this.articleId });
     
     if (demand) {
-      // ✅ AUTO UPDATE demand with new stock
+      // Calculate new demand: max(0, totalOrdered - availableStock)
       const newDemand = Math.max(0, demand.totalOrdered - this.availableQuantity);
+      
+      // Update demand with calculated values
       demand.availableStock = this.availableQuantity;
       demand.demand = newDemand;
       demand.lastStockUpdate = new Date();
+      
       await demand.save();
+      
+      console.log(`✅ Demand synced for ${this.articleId}: Stock=${this.availableQuantity}, Demand=${newDemand}`);
+    } else {
+      console.log(`⚠️ No demand record for ${this.articleId}`);
     }
   } catch (error) {
-    console.error('Demand sync failed:', error);
+    console.error('❌ Demand sync error:', error);
   }
 };
 
 // ✅ AUTO-TRIGGER on EVERY inventory save
-InventorySchema.post('save', function(doc) {
-  doc.syncDemand();
-});
-
-// ✅ HOOK: Auto-run on EVERY inventory save
-InventorySchema.post('save', async function() {
-  await this.updateDemand();
+InventorySchema.post('save', async function(doc) {
+  await doc.updateDemand();
 });
 
 // Updated syncWithQRCode method
@@ -120,13 +99,12 @@ InventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
         this.receivedQuantity += 1;
         this.availableQuantity += 1;
 
-        // ✅ ADD COLORS AND SIZES TO INVENTORY
+        // ADD COLORS AND SIZES TO INVENTORY
         if (qrCode.contractorInput?.colors && Array.isArray(qrCode.contractorInput.colors)) {
           const newColors = qrCode.contractorInput.colors
             .filter(c => c && c !== 'Unknown' && c.toLowerCase() !== 'unknown')
             .map(c => c.toLowerCase());
           
-          // Add only unique colors
           const uniqueColors = new Set([...this.colors, ...newColors]);
           this.colors = Array.from(uniqueColors).sort();
         }
@@ -136,7 +114,6 @@ InventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
             .filter(s => s && s !== 0)
             .map(s => Number(s));
           
-          // Add only unique sizes
           const uniqueSizes = new Set([...this.sizes, ...newSizes]);
           this.sizes = Array.from(uniqueSizes).sort((a, b) => a - b);
         }
@@ -161,11 +138,8 @@ InventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
     this.lastUpdated = new Date();
 
     await this.save();
-
-    const Demand = mongoose.model('Demand');
-    await Demand.updateDemandFromInventory(this.articleId, this.availableQuantity);
-
-    await this.updateDemand();
+    
+    // ✅ Demand will be automatically updated by the post-save hook
 
     return {
       success: true,
