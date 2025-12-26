@@ -264,7 +264,7 @@ const importProductsFromExcel = async (req, res) => {
 const deleteProduct = async (req, res) => {
   try {
     const { productid } = req.params;
-    
+
     // 1. Is it a top-level product?
     const productDoc = await productModel.findById(productid);
     if (productDoc) {
@@ -860,22 +860,21 @@ const getCategories = async (req, res) => {
 
 const getArticlesForDropdown = async (req, res) => {
   try {
-    // Use aggregation to flatten the nested structure and get articles with their IDs
     const articles = await productModel.aggregate([
-      { $unwind: "$variants" },
-      { $unwind: "variants.articles" },
+      { $unwind: "$variants" },                    // ✅ Already correct
+      { $unwind: "$variants.articles" },           // ✅ FIXED: Added $
       {
         $project: {
-          articleId: "variants.articles._id",
-          articleName: "variants.articles.name",
-          colors: "variants.articles.colors",
-          sizes: "variants.articles.sizes",
-          images: "variants.articles.images",
+          articleId: "$variants.articles._id",
+          articleName: "$variants.articles.name",
+          colors: "$variants.articles.colors",
+          sizes: "$variants.articles.sizes",
+          images: "$variants.articles.images",
           variantId: "$variants._id",
           variantName: "$variants.name",
           productId: "$_id",
           segment: "$segment",
-          allColorsAvailable: "variants.articles.allColorsAvailable"
+          allColorsAvailable: "$variants.articles.allColorsAvailable"
         }
       },
       { $sort: { articleName: 1 } }
@@ -887,6 +886,7 @@ const getArticlesForDropdown = async (req, res) => {
       data: articles
     });
   } catch (error) {
+    console.error('❌ Aggregation error:', error);
     return res.status(500).json({
       result: false,
       message: 'Error fetching articles',
@@ -894,6 +894,7 @@ const getArticlesForDropdown = async (req, res) => {
     });
   }
 };
+
 
 export {
   addProduct,
