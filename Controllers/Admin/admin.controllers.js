@@ -797,11 +797,12 @@ const scanQRCode = async (req, res) => {
       // Find or create inventory
       let inventory = await Inventory.findOne({ articleId: articleId.toString() });
 
-      if (!inventory) {
-
+       if (!inventory) {
+    // ✅ FIXED: Include productId when creating new inventory
         inventory = new Inventory({
           articleId: articleId.toString(),
           articleName,
+          productId: productId || null,  // ✅ ADD THIS LINE
           segment,
           articleImage,
           receivedQuantity: 0,
@@ -809,10 +810,7 @@ const scanQRCode = async (req, res) => {
           availableQuantity: 0,
           qrCodes: []
         });
-      } else {
-
       }
-
 
       
       qrCode.scans.push({

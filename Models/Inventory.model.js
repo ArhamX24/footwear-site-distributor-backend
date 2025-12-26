@@ -3,18 +3,18 @@ import mongoose from 'mongoose';
 
 const { Schema, model } = mongoose;
 
-// Models/Inventory.model.js
 const InventorySchema = new Schema({
   // ✅ PRIMARY KEY (QR/article level)
   articleId: { type: String, required: true, unique: true },
   articleName: { type: String, required: true },
   
-  // ✅ PRODUCT REFERENCE (for grouping)
+  // ✅ PRODUCT REFERENCE (for grouping) - MADE OPTIONAL
   productId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Product',
-    required: true,
-    index: true  // Speed up queries
+    required: false,  // ✅ CHANGED: Made optional to prevent errors
+    default: null,
+    index: true
   },
   
   segment: { type: String, default: 'Unknown' },
@@ -60,7 +60,6 @@ InventorySchema.methods.updateDemand = async function() {
       { new: true }
     );
 
-
   } catch (error) {
     console.error('Demand sync error:', error);
   }
@@ -79,8 +78,6 @@ InventorySchema.methods.syncDemand = async function() {
       demand.demand = newDemand;
       demand.lastStockUpdate = new Date();
       await demand.save();
-      
-
     }
   } catch (error) {
     console.error('Demand sync failed:', error);
@@ -92,17 +89,13 @@ InventorySchema.post('save', function(doc) {
   doc.syncDemand();
 });
 
-
 // ✅ HOOK: Auto-run on EVERY inventory save
 InventorySchema.post('save', async function() {
   await this.updateDemand();
 });
 
-
 // Updated syncWithQRCode method
 InventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
-
-
   try {
     const QRCode = mongoose.model('QRCode');
     const qrCode = await QRCode.findById(qrCodeId);
@@ -184,11 +177,9 @@ InventorySchema.methods.syncWithQRCode = async function(qrCodeId) {
     };
 
   } catch (error) {
-   
     throw error;
   }
 };
-
 
 const Inventory = model('Inventory', InventorySchema);
 
