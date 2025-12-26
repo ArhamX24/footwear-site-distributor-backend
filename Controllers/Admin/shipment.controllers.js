@@ -169,7 +169,6 @@ const generateShipmentPerforma = async (req, res) => {
     try {
         const { shipmentId } = req.params;
 
-        // Get shipment data
         const shipment = await Shipment.findById(shipmentId)
             .populate('distributorId', 'distributorDetails phoneNo')
             .exec();
@@ -178,18 +177,15 @@ const generateShipmentPerforma = async (req, res) => {
             return res.status(404).json({ result: false, message: 'Shipment not found' });
         }
 
-        // Create PDF Document
         const doc = new PDFDocument({
             size: 'A4',
             margin: 30,
             bufferPages: true
         });
 
-        // Set response headers
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="Performa_${shipment.shipmentId}.pdf"`);
 
-        // Pipe to response
         doc.pipe(res);
 
         // ========== HEADER SECTION ==========
@@ -201,7 +197,6 @@ const generateShipmentPerforma = async (req, res) => {
         // ========== SHIPMENT & DISTRIBUTOR INFO ==========
         const infoStartY = doc.y;
         
-        // LEFT COLUMN - Shipment Details
         doc.fontSize(10).font('Helvetica-Bold').text('SHIPMENT INFO', 30, infoStartY, { underline: true });
         doc.fontSize(8).font('Helvetica');
         
@@ -214,7 +209,6 @@ const generateShipmentPerforma = async (req, res) => {
         leftY += 12;
         doc.text(`Shipped: ${new Date(shipment.shippedAt).toLocaleDateString('en-GB')}`, 30, leftY);
 
-        // RIGHT COLUMN - Distributor Details
         doc.fontSize(10).font('Helvetica-Bold').text('DISTRIBUTOR INFO', 320, infoStartY, { underline: true });
         doc.fontSize(8).font('Helvetica');
         
@@ -227,34 +221,21 @@ const generateShipmentPerforma = async (req, res) => {
         rightY += 12;
         doc.text(`City: ${shipment.distributorCity || 'N/A'}`, 320, rightY);
 
-        // Set Y position after both columns
         doc.y = Math.max(leftY, rightY) + 10;
         doc.moveTo(30, doc.y).lineTo(565, doc.y).stroke();
         doc.moveDown(0.5);
 
-        // ========== SHIPMENT MANAGER ==========
-        if (shipment.shippedBy && Object.keys(shipment.shippedBy).length > 0) {
-            doc.fontSize(10).font('Helvetica-Bold').text('SHIPMENT MANAGER', { underline: true });
-            doc.fontSize(8).font('Helvetica');
-            doc.text(`Name: ${shipment.shippedBy.name || 'N/A'}`);
-            doc.text(`Phone: ${shipment.shippedBy.phoneNo || 'N/A'}`);
-            doc.moveTo(30, doc.y + 3).lineTo(565, doc.y + 3).stroke();
-            doc.moveDown(0.5);
-        }
-
         // ========== ARTICLE DETAILS TABLE ==========
-        // ✅ CENTERED HEADER
         doc.fontSize(10).font('Helvetica-Bold').text('ARTICLE DETAILS', { align: 'center', underline: true });
         doc.moveDown(0.5);
 
-        // Table Header
         const tableTop = doc.y;
         const col1X = 30;   // Article Name
         const col2X = 140;  // Segment
         const col3X = 220;  // Sizes
         const col4X = 290;  // Colors
         const col5X = 410;  // Category
-        const col6X = 500;  // Cartons
+        const col6X = 500;  // Quantity (Cartons)
         const rowHeight = 20;
 
         // Header Background
@@ -267,12 +248,12 @@ const generateShipmentPerforma = async (req, res) => {
         doc.text('Sizes', col3X, tableTop + 6, { width: 60, lineBreak: false });
         doc.text('Colors', col4X, tableTop + 6, { width: 110, lineBreak: false });
         doc.text('Category', col5X, tableTop + 6, { width: 80, lineBreak: false });
-        doc.text('Cartons', col6X, tableTop + 6, { width: 50, lineBreak: false });
+        doc.text('Quantity', col6X, tableTop + 6, { width: 50, lineBreak: false });
 
         let currentY = tableTop + rowHeight;
         doc.font('Helvetica').fontSize(7);
 
-        // Table Rows
+        // ✅ FIXED: Table Rows - show quantity per article
         shipment.items.forEach((item, index) => {
             const rowY = currentY;
 
@@ -292,7 +273,7 @@ const generateShipmentPerforma = async (req, res) => {
             const segment = String(item.productReference?.segment || 'N/A');
             doc.text(segment, col2X, rowY + 6, { width: 70, lineBreak: false });
 
-            // Sizes from articleDetails.sizes
+            // Sizes
             let sizes = 'N/A';
             if (item.articleDetails?.sizes && Array.isArray(item.articleDetails.sizes) && item.articleDetails.sizes.length > 0) {
                 if (item.articleDetails.sizes.length === 1) {
@@ -313,9 +294,9 @@ const generateShipmentPerforma = async (req, res) => {
             const variant = String(item.productReference?.variantName || 'N/A');
             doc.text(variant, col5X, rowY + 6, { width: 80, lineBreak: false });
 
-            // Total Cartons from shipment level
-            const cartons = String(shipment.totalCartons || '0');
-            doc.text(cartons, col6X, rowY + 6, { width: 50, lineBreak: false });
+            // ✅ FIXED: Quantity - show actual quantity of this article
+            const quantity = String(item.quantity || '0');
+            doc.text(quantity, col6X, rowY + 6, { width: 50, lineBreak: false });
 
             currentY += rowHeight;
         });
@@ -323,6 +304,7 @@ const generateShipmentPerforma = async (req, res) => {
         // Total Cartons Row
         doc.moveTo(30, currentY).lineTo(570, currentY).stroke();
         doc.fontSize(8).font('Helvetica-Bold');
+        // ✅ FIXED: Show actual total cartons
         doc.text(`Total Cartons: ${shipment.totalCartons || 0}`, 450, currentY + 8);
 
         // ========== FOOTER ==========
@@ -330,18 +312,17 @@ const generateShipmentPerforma = async (req, res) => {
         doc.fontSize(7).font('Helvetica').fill('#888888');
         doc.text(`Generated on: ${new Date().toLocaleString('en-GB')}`, 30);
 
-        // ========== END DOCUMENT ==========
         doc.end();
 
     } catch (error) {
         console.error('Error generating shipment performa:', error);
         
-        // Only send error response if headers haven't been sent yet
         if (!res.headersSent) {
             res.status(500).json({ result: false, message: 'Error generating performa', error: error.message });
         }
     }
 };
+
 
 
 

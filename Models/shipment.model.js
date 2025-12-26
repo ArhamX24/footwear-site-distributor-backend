@@ -5,37 +5,33 @@ const { Schema, model } = mongoose;
 
 const ShipmentItemSchema = new Schema(
   {
-    qrCodeId: {
-      type: Schema.Types.ObjectId,
-      ref: 'QRCode',
-      required: true,
-    },
-    uniqueId: {
-      type: String,
-      required: true,
-    },
-    articleName: {
-      type: String,
-      required: true,
-    },
+    // ✅ CHANGED: Store array of QR codes for same article
+    qrCodes: [{
+      qrCodeId: { type: Schema.Types.ObjectId, ref: 'QRCode', required: true },
+      uniqueId: { type: String, required: true },
+      cartonNumber: Number,
+      scannedAt: { type: Date, default: Date.now }
+    }],
+    
+    articleName: { type: String, required: true },
     articleImage: String,
+    
+    // ✅ CHANGED: Remove cartonNumber and totalCartons from here
     articleDetails: {
       colors: [String],
-      sizes: [Number],
-      cartonNumber: Number,
-      totalCartons: Number,
+      sizes: [Number]
     },
+    
     productReference: {
       productId: Schema.Types.ObjectId,
       variantId: Schema.Types.ObjectId,
       articleId: Schema.Types.ObjectId,
       segment: String,
-      variantName: String,
+      variantName: String
     },
-    scannedAt: {
-      type: Date,
-      default: Date.now,
-    },
+    
+    // ✅ NEW: Quantity of this specific article
+    quantity: { type: Number, default: 0, min: 0 }
   },
   { _id: false }
 );
@@ -46,14 +42,14 @@ const ShipmentSchema = new Schema(
       type: String,
       required: true,
       unique: true,
-      index: true,
+      index: true
     },
 
     // Distributor
     distributorId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
-      required: true,
+      required: true
     },
     distributorName: String,
     distributorPhoneNo: String,
@@ -69,31 +65,32 @@ const ShipmentSchema = new Schema(
       userId: Schema.Types.ObjectId,
       userType: String,
       name: String,
-      phoneNo: String,
+      phoneNo: String
     },
 
     shippedAt: {
       type: Date,
-      default: Date.now,
+      default: Date.now
     },
 
+    // ✅ FIXED: This should be total scanned cartons across all articles
     totalCartons: {
       type: Number,
       required: true,
-      default: 0,
+      default: 0
     },
 
     status: {
       type: String,
       enum: ['pending', 'in_transit', 'delivered', 'cancelled'],
-      default: 'in_transit',
+      default: 'in_transit'
     },
 
     trackingNumber: String,
-    notes: String,
+    notes: String
   },
   {
-    timestamps: true,
+    timestamps: true
   }
 );
 
