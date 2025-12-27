@@ -58,10 +58,7 @@ InventorySchema.methods.updateDemand = async function() {
       demand.lastStockUpdate = new Date();
       
       await demand.save();
-      
-      console.log(`✅ Demand synced for ${this.articleId}: Stock=${this.availableQuantity}, Demand=${newDemand}`);
-    } else {
-      console.log(`⚠️ No demand record for ${this.articleId}`);
+
     }
   } catch (error) {
     console.error('❌ Demand sync error:', error);

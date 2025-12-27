@@ -46,7 +46,7 @@ const getAllShipments = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[SHIPMENTS] Error:', error);
+
     res.status(500).json({
       result: false,
       message: 'Failed to fetch shipments',
@@ -92,7 +92,7 @@ const getShipmentById = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[SHIPMENT-DETAILS] Error:', error);
+
     res.status(500).json({
       result: false,
       message: 'Failed to fetch shipment details',
@@ -157,7 +157,7 @@ const cleanupOldShipments = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('[CLEANUP] Error:', error);
+
     res.status(500).json({
       result: false,
       message: 'Failed to cleanup shipments'

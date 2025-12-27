@@ -761,7 +761,7 @@ const markPurchaseConfirm = async (req, res) => {
   try {
     let { id: productid } = req?.params;
     
-    console.log('🔍 Confirming order ID:', productid); // ✅ DEBUG
+
     
     if (!productid) {
       return res.status(statusCodes.badRequest).send({
@@ -773,7 +773,7 @@ const markPurchaseConfirm = async (req, res) => {
     // ✅ FIXED: Use correct field name from schema
     let purchase = await purchaseProductModel.findById(productid);
     
-    console.log('🔍 Found purchase:', purchase?._id, 'Current status:', purchase?.isFulfiled); // ✅ DEBUG
+
     
     if (!purchase) {
       return res.status(statusCodes.notFound).send({
@@ -786,14 +786,14 @@ const markPurchaseConfirm = async (req, res) => {
     purchase.isFulfiled = true; 
     await purchase.save();
 
-    console.log('✅ Order confirmed:', purchase._id); // ✅ DEBUG
+
 
     return res.status(statusCodes.success).send({
       result: true,
       message: 'Purchase confirmed successfully'
     });
   } catch (error) {
-    console.error('❌ markPurchaseConfirm ERROR:', error);
+
     return res.status(statusCodes.serverError).send({
       result: false,
       message: 'Error in Marking Purchase. Please Try Again Later',
@@ -886,7 +886,7 @@ const getArticlesForDropdown = async (req, res) => {
       data: articles
     });
   } catch (error) {
-    console.error('❌ Aggregation error:', error);
+
     return res.status(500).json({
       result: false,
       message: 'Error fetching articles',

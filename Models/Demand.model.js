@@ -54,7 +54,7 @@ DemandSchema.statics.updateDemandFromInventory = async function(articleId, avail
       
       await demand.save();
       
-      console.log(`✅ Demand updated for article ${articleId}: Stock=${availableQuantity}, Demand=${newDemand}`);
+
       
       return {
         success: true,
@@ -63,7 +63,7 @@ DemandSchema.statics.updateDemandFromInventory = async function(articleId, avail
         demand: newDemand
       };
     } else {
-      console.log(`⚠️ No demand record found for article ${articleId}`);
+
       return {
         success: false,
         message: 'No demand record found'

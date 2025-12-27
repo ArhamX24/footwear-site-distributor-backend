@@ -117,7 +117,7 @@ QRTrackerSchema.statics.trackQRGeneration = async function(
     
     return tracking;
   } catch (error) {
-    console.error('Error tracking QR generation:', error);
+
     throw error;
   }
 };
@@ -149,7 +149,7 @@ QRTrackerSchema.statics.getMonthlyReport = async function(contractorId, year, mo
     
     return report;
   } catch (error) {
-    console.error('Error fetching monthly report:', error);
+
     throw error;
   }
 };

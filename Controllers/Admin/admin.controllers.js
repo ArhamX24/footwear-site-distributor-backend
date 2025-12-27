@@ -571,7 +571,7 @@ const downloadContractorMonthlyReport = async (req, res) => {
     await workbook.xlsx.write(res);
     res.end();
   } catch (error) {
-    console.error('Error generating Excel:', error);
+
     res.status(500).json({
       result: false,
       message: 'Failed to generate report',
@@ -681,7 +681,7 @@ const downloadAllContractorsReport = async (req, res) => {
     await workbook.xlsx.write(res);
     res.end();
   } catch (error) {
-    console.error('Error generating Excel:', error);
+
     res.status(500).json({
       result: false,
       message: 'Failed to generate report',
@@ -943,10 +943,10 @@ const scanQRCode = async (req, res) => {
       // Convert articleId to string for comparison
       const articleIdString = articleId?.toString() || '';
       
-      console.log(`🔍 [SHIPMENT] Searching for article: ${articleIdString} (${articleName})`);
+
 
       if (!shipment) {
-        console.log('✅ [SHIPMENT] Creating NEW shipment');
+
         
         // Create new shipment
         const shipmentId = `SHIP_${Date.now()}_${distributor._id.toString().slice(-6)}`;
@@ -994,10 +994,8 @@ const scanQRCode = async (req, res) => {
           notes: notes || `Shipment to ${distributor.distributorDetails?.partyName || distributor.name}`
         });
 
-        console.log(`✅ [SHIPMENT] New shipment created with 1 item`);
       } else {
-        console.log(`🔍 [SHIPMENT] Existing shipment found: ${shipment.shipmentId}`);
-        console.log(`📦 [SHIPMENT] Current items count: ${shipment.items.length}`);
+
         
         // Find existing article by matching articleId
         let existingItemIndex = -1;
@@ -1006,18 +1004,18 @@ const scanQRCode = async (req, res) => {
           const item = shipment.items[i];
           const itemArticleId = item.productReference?.articleId?.toString() || '';
           
-          console.log(`   Comparing item ${i}: ${itemArticleId} === ${articleIdString}`);
+
           
           if (itemArticleId === articleIdString) {
             existingItemIndex = i;
-            console.log(`✅ [SHIPMENT] MATCH FOUND at index ${i}!`);
+
             break;
           }
         }
 
         if (existingItemIndex !== -1) {
           // Article exists - add QR code to existing item
-          console.log(`✅ [SHIPMENT] Adding to EXISTING article at index ${existingItemIndex}`);
+
           
           shipment.items[existingItemIndex].qrCodes.push({
             qrCodeId: qrCode._id,
@@ -1028,12 +1026,10 @@ const scanQRCode = async (req, res) => {
           
           // Increment quantity for this article
           shipment.items[existingItemIndex].quantity += 1;
-          
-          console.log(`✅ [SHIPMENT] Article "${articleName}" now has ${shipment.items[existingItemIndex].quantity} cartons`);
-          console.log(`✅ [SHIPMENT] QR codes in this article: ${shipment.items[existingItemIndex].qrCodes.length}`);
+
         } else {
           // New article - create new item
-          console.log(`➕ [SHIPMENT] Adding NEW article: ${articleName}`);
+
           
           shipment.items.push({
             qrCodes: [{
@@ -1058,14 +1054,13 @@ const scanQRCode = async (req, res) => {
             quantity: 1
           });
           
-          console.log(`✅ [SHIPMENT] New article added to shipment`);
+
         }
         
         // Update total cartons (sum all quantities)
         shipment.totalCartons = shipment.items.reduce((total, item) => total + item.quantity, 0);
         
-        console.log(`📊 [SHIPMENT] Total unique articles: ${shipment.items.length}`);
-        console.log(`📊 [SHIPMENT] Total cartons: ${shipment.totalCartons}`);
+
         
         shipment.notes = `${shipment.notes || ''} | Added ${articleName}`.trim();
       }
@@ -1075,7 +1070,7 @@ const scanQRCode = async (req, res) => {
       
       await shipment.save();
 
-      console.log(`💾 [SHIPMENT] Shipment saved successfully`);
+
 
       // Update QR code with shipment details
       qrCode.shipmentDetails = {
@@ -1133,7 +1128,7 @@ const scanQRCode = async (req, res) => {
     }
 
   } catch (error) {
-    console.error('❌ [SCAN] Error:', error);
+
     res.status(500).json({
       result: false,
       message: "Scan failed",
@@ -1273,7 +1268,7 @@ const getInventoryData = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Inventory fetch error:', error);
+
     res.status(500).json({
       result: false,
       message: 'Failed to fetch inventory data',
