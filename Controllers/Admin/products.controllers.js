@@ -36,44 +36,57 @@ const productValidationSchema = zod.object({
   ])
 });
 
+const parseField = (field) => {
+  if (!field) return [];
+
+  if (Array.isArray(field)) {
+    return field.map(v => v.trim().toLowerCase()).filter(Boolean);
+  }
+
+  if (typeof field === "string") {
+    return field
+      .split(",")
+      .map(v => v.trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  return [];
+};
+
 const addProduct = async (req, res) => {
   try {
-    let { segment, gender, articleName, colors, sizes, variant, segmentKeywords, variantKeywords, articleKeywords } = req.body;
+    let { segment, articleName, colors, sizes, variant, segmentKeywords, variantKeywords, articleKeywords } = req.body;
+    let { gender } = req.body;
 
-    segment = segment?.trim().toLowerCase();
-    variant = variant?.trim().toLowerCase();
-    articleName = articleName?.trim().toLowerCase();
+    console.log(req.body);
 
-    // ✅ FIXED: Safe keyword processing
-    let segmentKeywordsArr = [];
-    let variantKeywordsArr = [];
-    let articleKeywordsArr = [];
+const genderArr = Array.isArray(gender)
+  ? gender.map(g => g.trim().toLowerCase()).filter(Boolean)
+  : typeof gender === 'string'
+    ? [gender.trim().toLowerCase()]
+    : [];
 
-    if (segmentKeywords) {
-      if (Array.isArray(segmentKeywords)) {
-        segmentKeywordsArr = segmentKeywords.map(k => k.trim().toLowerCase()).filter(Boolean);
-      } else if (typeof segmentKeywords === 'string') {
-        segmentKeywordsArr = segmentKeywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
-      }
-    }
+    // Preserve casing, only trim
+    segment = segment?.trim();
+    variant = variant?.trim();
+    articleName = articleName?.trim();
 
-    if (variantKeywords) {
-      if (Array.isArray(variantKeywords)) {
-        variantKeywordsArr = variantKeywords.map(k => k.trim().toLowerCase()).filter(Boolean);
-      } else if (typeof variantKeywords === 'string') {
-        variantKeywordsArr = variantKeywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
-      }
-    }
+    const segmentKeywordsArr = parseField(req.body.segmentKeywords);
+    const variantKeywordsArr = parseField(req.body.variantKeywords);
+    const articleKeywordsArr = parseField(req.body.articleKeywords);
 
-    if (articleKeywords) {
-      if (Array.isArray(articleKeywords)) {
-        articleKeywordsArr = articleKeywords.map(k => k.trim().toLowerCase()).filter(Boolean);
-      } else if (typeof articleKeywords === 'string') {
-        articleKeywordsArr = articleKeywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
-      }
-    }
+    const colorsArr = Array.isArray(colors)
+      ? colors.map(c => c.trim()).filter(Boolean)
+      : typeof colors === 'string'
+        ? colors.split(',').map(c => c.trim()).filter(Boolean)
+        : [];
 
-    // ✅ IMG BB UPLOAD (unchanged)
+    const sizesArr = Array.isArray(sizes)
+      ? sizes.map(s => s.trim()).filter(Boolean)
+      : typeof sizes === 'string'
+        ? sizes.split(',').map(s => s.trim()).filter(Boolean)
+        : [];
+
     if (!req.files || req.files.length === 0) {
       return res.status(statusCodes.badRequest).send({
         result: false,
@@ -83,7 +96,7 @@ const addProduct = async (req, res) => {
 
     const uploadPromises = req.files.map(file => uploadOnImgBB(file.path));
     let uploadResults;
-    
+
     try {
       uploadResults = await Promise.all(uploadPromises);
     } catch (uploadError) {
@@ -104,71 +117,65 @@ const addProduct = async (req, res) => {
       });
     }
 
-    // Fetch existing segment
-    let existingSegment = await productModel.findOne({ segment });
-
+    // ✅ All keywords stored at article level only
     const newArticle = {
       name: articleName,
       images: imageUrls,
-      gender,
-      keywords: articleKeywordsArr
+      gender: genderArr,
+      colors: colorsArr,
+      sizes: sizesArr,
+      segmentKeywords: segmentKeywordsArr,
+      variantKeywords: variantKeywordsArr,
+      articleKeywords: articleKeywordsArr,
     };
 
+    // Case-insensitive segment lookup
+    let existingSegment = await productModel.findOne({
+      segment: { $regex: new RegExp(`^${segment}$`, 'i') }
+    });
+
     if (!existingSegment) {
-      // ✅ FIXED: Safe array spread
+      // Brand new segment
       await productModel.create({
         segment,
-        keywords: segmentKeywordsArr, 
         variants: [{
           name: variant,
-          keywords: variantKeywordsArr,
           articles: [newArticle]
         }]
       });
       return res.status(statusCodes.success).send({
         result: true,
-        message: 'Segment, variant, and article created'
+        message: 'Segment, variant, and article created successfully'
       });
     }
 
-    // ✅ FIXED: Safe array merge (check if arrays exist)
-    const updatedSegmentKeywords = [
-      ...(existingSegment.keywords || []),
-      ...segmentKeywordsArr
-    ].filter(Boolean);
-    existingSegment.keywords = updatedSegmentKeywords;
-
-    // Find or create variant
-    let variantIndex = existingSegment.variants.findIndex(v => v.name === variant);
+    // Existing segment — find or create variant (case-insensitive)
+    let variantIndex = existingSegment.variants.findIndex(
+      v => v.name?.toLowerCase() === variant?.toLowerCase()
+    );
 
     if (variantIndex === -1) {
+      // New variant under existing segment
       existingSegment.variants.push({
         name: variant,
-        keywords: variantKeywordsArr,
         articles: [newArticle]
       });
     } else {
-      const existingVariant = existingSegment.variants[variantIndex];
-      const updatedVariantKeywords = [
-        ...(existingVariant.keywords || []),
-        ...variantKeywordsArr
-      ].filter(Boolean);
-      
-      existingSegment.variants[variantIndex].keywords = updatedVariantKeywords;
+      // Existing variant — just push the new article
       existingSegment.variants[variantIndex].articles.push(newArticle);
     }
 
     await existingSegment.save();
     return res.status(statusCodes.success).send({
       result: true,
-      message: 'Variant and/or article added to existing segment'
+      message: 'Article added successfully'
     });
 
   } catch (error) {
-
+    console.error('Error in addProduct:', error);
     return res.status(statusCodes.serverError).send({
       result: false,
-      message: 'Error in Adding Product. Please Try Again Later',
+      message: 'Error adding product. Please try again later',
       error: error.message
     });
   }
@@ -309,9 +316,7 @@ const deleteProduct = async (req, res) => {
 
 const updateProduct = async (req, res) => {
   try {
-    // ✅ ID from body works perfectly!
     let productid = req.params.productid || req.params.id || req.params.articleId || req.body.articleId || req.body.id;
-    
 
     if (!productid) {
       return res.status(statusCodes.badRequest).send({
@@ -320,32 +325,24 @@ const updateProduct = async (req, res) => {
       });
     }
 
-    let { name, segment, gender, variantName, existingImages, segmentKeywords, variantKeywords, articleKeywords } = req.body;
+    let { name, variantName, existingImages, segmentKeywords, variantKeywords, articleKeywords } = req.body;
+    let { gender } = req.body;
 
-    // Normalize inputs
-    name = name?.trim().toLowerCase();
-    segment = segment?.trim().toLowerCase();
-    gender = gender?.trim().toLowerCase();
-    variantName = variantName?.trim().toLowerCase();
+    console.log(req.body);
 
-    // ✅ Safe keyword arrays
-    const segmentKeywordsArr = Array.isArray(segmentKeywords) 
-      ? segmentKeywords.map(k => k.trim().toLowerCase()).filter(Boolean)
-      : typeof segmentKeywords === 'string' 
-        ? segmentKeywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean)
-        : [];
+  const genderArr = Array.isArray(gender)
+    ? gender.map(g => g.trim().toLowerCase()).filter(Boolean)
+    : typeof gender === 'string'
+      ? [gender.trim().toLowerCase()]
+      : [];
 
-    const variantKeywordsArr = Array.isArray(variantKeywords) 
-      ? variantKeywords.map(k => k.trim().toLowerCase()).filter(Boolean)
-      : typeof variantKeywords === 'string' 
-        ? variantKeywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean)
-        : [];
+    // Preserve casing, only trim
+    name = name?.trim();
+    variantName = variantName?.trim();
 
-    const articleKeywordsArr = Array.isArray(articleKeywords) 
-      ? articleKeywords.map(k => k.trim().toLowerCase()).filter(Boolean)
-      : typeof articleKeywords === 'string' 
-        ? articleKeywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean)
-        : [];
+    const segmentKeywordsArr = parseField(req.body.segmentKeywords);
+    const variantKeywordsArr = parseField(req.body.variantKeywords);
+    const articleKeywordsArr = parseField(req.body.articleKeywords);
 
     // Parse existing images
     let existingImagesArr = [];
@@ -361,13 +358,12 @@ const updateProduct = async (req, res) => {
       }
     }
 
-    // ✅ FIXED: SIMPLE LOOP - Matches YOUR EXACT SCHEMA
+    // Find the article by ID across all products
     const allProducts = await productModel.find();
     let targetProduct = null;
     let targetVariantIndex = -1;
     let targetArticleIndex = -1;
 
-    // Find article by _id (68da37ae22719896b081f260)
     for (let pIndex = 0; pIndex < allProducts.length; pIndex++) {
       const product = allProducts[pIndex];
       for (let vIndex = 0; vIndex < product.variants.length; vIndex++) {
@@ -377,7 +373,6 @@ const updateProduct = async (req, res) => {
             targetProduct = product;
             targetVariantIndex = vIndex;
             targetArticleIndex = aIndex;
-
             break;
           }
         }
@@ -387,14 +382,13 @@ const updateProduct = async (req, res) => {
     }
 
     if (!targetProduct || targetVariantIndex === -1 || targetArticleIndex === -1) {
-
       return res.status(statusCodes.notFound).send({
         result: false,
         message: 'Article not found in database'
       });
     }
 
-    // ✅ IMG BB UPLOAD
+    // Handle new image uploads
     let newImageUrls = [];
     if (req.files && req.files.length > 0) {
       const uploadPromises = req.files.map(file => uploadOnImgBB(file.path));
@@ -403,9 +397,7 @@ const updateProduct = async (req, res) => {
         newImageUrls = uploadResults
           .filter(result => result?.secure_url)
           .map(result => result.secure_url);
-
       } catch (uploadError) {
-
         return res.status(statusCodes.badRequest).send({
           result: false,
           message: 'Image upload failed'
@@ -421,23 +413,15 @@ const updateProduct = async (req, res) => {
       });
     }
 
-    // ✅ UPDATE ARTICLE (Your exact schema)
+    // ✅ Update article fields only — keywords fully scoped to this article
     const targetArticle = targetProduct.variants[targetVariantIndex].articles[targetArticleIndex];
-    targetArticle.name = name || targetArticle.name;
-    targetArticle.gender = gender || targetArticle.gender;
+
+    if (name) targetArticle.name = name;
+    if (genderArr.length > 0) targetArticle.gender = genderArr;
     targetArticle.images = allImages;
-    targetArticle.keywords = articleKeywordsArr;
-
-    // Update keywords (merge)
-    targetProduct.keywords = [...new Set([
-      ...(targetProduct.keywords || []),
-      ...segmentKeywordsArr
-    ])];
-
-    targetProduct.variants[targetVariantIndex].keywords = [...new Set([
-      ...(targetProduct.variants[targetVariantIndex].keywords || []),
-      ...variantKeywordsArr
-    ])];
+    targetArticle.segmentKeywords = segmentKeywordsArr;
+    targetArticle.variantKeywords = variantKeywordsArr;
+    targetArticle.articleKeywords = articleKeywordsArr;
 
     // Update variant name if changed
     if (variantName) {
@@ -446,13 +430,13 @@ const updateProduct = async (req, res) => {
 
     await targetProduct.save();
 
-
     return res.status(statusCodes.success).send({
       result: true,
       message: 'Article updated successfully!'
     });
 
   } catch (error) {
+    console.error('Error in updateProduct:', error);
     return res.status(statusCodes.serverError).send({
       result: false,
       message: 'Server error',
@@ -460,7 +444,6 @@ const updateProduct = async (req, res) => {
     });
   }
 };
-
 
 const getAllProducts = async (req, res) => {
   try {
@@ -477,31 +460,30 @@ const getAllProducts = async (req, res) => {
 
     // Flatten to articles with context AND keywords
     const articles = products.flatMap(product =>
-      product.variants.flatMap(variant =>
-        variant.articles.map(article => ({
-          id: article._id,
-          name: article.name,
-          colors: article.colors,
-          sizes: article.sizes,
-          images: article.images,
-          gender: article.gender,
-          indeal: article.indeal,
-          deal: article.deal,
-          allColorsAvailable: article.allColorsAvailable,
-          createdAt: article.createdAt,
-          updatedAt: article.updatedAt,
-          // Include all keywords
-          articleKeywords: article.keywords,
-          // Context fields
-          variantId: variant._id,
-          variantName: variant.name,
-          variantKeywords: variant.keywords,
-          productId: product._id,
-          segment: product.segment,
-          segmentKeywords: product.keywords
-        }))
-      )
-    );
+  product.variants.flatMap(variant =>
+    variant.articles.map(article => ({
+      id: article._id,
+      name: article.name,
+      colors: article.colors,
+      sizes: article.sizes,
+      images: article.images,
+      gender: article.gender,
+      indeal: article.indeal,
+      deal: article.deal,
+      allColorsAvailable: article.allColorsAvailable,
+      createdAt: article.createdAt,
+      updatedAt: article.updatedAt,
+      articleKeywords: article.articleKeywords,
+      variantKeywords: article.variantKeywords,
+      segmentKeywords: article.segmentKeywords,
+      // Context fields
+      variantId: variant._id,
+      variantName: variant.name,
+      productId: product._id,
+      segment: product.segment,
+    }))
+  )
+);
 
     // If frontend only wants articles list
     if (format === 'articles') {
