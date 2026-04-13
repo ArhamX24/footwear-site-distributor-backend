@@ -25,6 +25,8 @@ server.use(cookieParser());
 const allowedOrigins = [
   "https://pinkeyfootwear.in",
   "https://www.pinkeyfootwear.in",
+  "http://pinkeyfootwear.in",
+  "http://www.pinkeyfootwear.in",
   "https://pinkeyfootwear.netlify.app",
   "https://pinkey-demo.netlify.app",
   "pinkey-demo.netlify.app",
@@ -77,7 +79,6 @@ dbConnect()
   .then(() => {
     const PORT = process.env.PORT || 6000;
     server.listen(PORT, () => {});
-    console.log(`db uri ${process.env.MONNGO_DB_URI}`);
   })
   .catch((err) => {
     process.exit(1);
