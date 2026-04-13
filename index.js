@@ -77,6 +77,7 @@ dbConnect()
   .then(() => {
     const PORT = process.env.PORT || 5000;
     server.listen(PORT, () => {});
+    console.log(`db uri ${process.env.MONNGO_DB_URI}`);
   })
   .catch((err) => {
     process.exit(1);
