@@ -517,15 +517,17 @@ const downloadContractorMonthlyReport = async (req, res) => {
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('QR Generation Report');
 
-    // ✅ UPDATED: Add 3 new columns
     worksheet.columns = [
-      { header: 'Date', key: 'date', width: 12 },
-      { header: 'Article Name', key: 'articleName', width: 20 },
-      { header: 'Segment', key: 'segment', width: 12 },
-      { header: 'QR Generated', key: 'qrGeneratedCount', width: 12 },
-      { header: 'Bharra', key: 'bharra', width: 12 },
-      { header: 'Printing', key: 'printing', width: 12 },
-      { header: 'Packing', key: 'packing', width: 12 }
+      { header: 'Date',           key: 'date',             width: 12 },
+      { header: 'Article Name',   key: 'articleName',      width: 20 },
+      { header: 'Segment',        key: 'segment',          width: 12 },
+      { header: 'QR Generated',   key: 'qrGeneratedCount', width: 12 },
+      { header: 'Bharra',         key: 'bharra',           width: 12 },
+      { header: 'Printing',       key: 'printing',         width: 12 },
+      { header: 'Packing',        key: 'packing',          width: 12 },
+      { header: 'Carton Pair',    key: 'cartonPair',       width: 14 },
+      { header: 'Color Printing', key: 'colorPrinting',    width: 14 },
+      { header: 'Imbozing',       key: 'imbozing',         width: 14 },
     ];
 
     // Style header row
@@ -534,31 +536,39 @@ const downloadContractorMonthlyReport = async (req, res) => {
     headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4B5563' } };
     headerRow.alignment = { horizontal: 'center', vertical: 'center' };
 
-    // Add data rows
+    // ✅ FIX: declare totalQRs before forEach
     let totalQRs = 0;
+
     report.forEach((item) => {
       worksheet.addRow({
-        date: new Date(item.date).toLocaleDateString('en-IN'),
-        articleName: item.articleName,
-        segment: item.segment || 'N/A',
+        date:             new Date(item.date).toLocaleDateString('en-IN'),
+        articleName:      item.articleName,
+        segment:          item.segment          || 'N/A',
         qrGeneratedCount: item.qrGeneratedCount,
-        bharra: item.bharra || 'N/A',
-        printing: item.printing || 'N/A',
-        packing: item.packing || 'N/A'
+        bharra:           item.bharra           || 'N/A',
+        printing:         item.printing         || 'N/A',
+        packing:          item.packing          || 'N/A',
+        cartonPair:       item.cartonPair       || 'N/A',
+        colorPrinting:    item.colorPrinting    || 'N/A',
+        imbozing:         item.imbozing         || 'N/A',
       });
       totalQRs += item.qrGeneratedCount;
     });
 
-    // Add total row
+    // Total row
     const totalRow = worksheet.addRow({
-      date: 'TOTAL',
-      articleName: '',
-      segment: '',
+      date:             'TOTAL',
+      articleName:      '',
+      segment:          '',
       qrGeneratedCount: totalQRs,
-      bharra: '',
-      printing: '',
-      packing: ''
+      bharra:           '',
+      printing:         '',
+      packing:          '',
+      cartonPair:       '',
+      colorPrinting:    '',
+      imbozing:         '',
     });
+
     totalRow.font = { bold: true };
     totalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFCCCCCC' } };
 
@@ -570,8 +580,9 @@ const downloadContractorMonthlyReport = async (req, res) => {
 
     await workbook.xlsx.write(res);
     res.end();
-  } catch (error) {
 
+  } catch (error) {
+    console.error('Error generating monthly report:', error);
     res.status(500).json({
       result: false,
       message: 'Failed to generate report',
@@ -579,7 +590,6 @@ const downloadContractorMonthlyReport = async (req, res) => {
     });
   }
 };
-;
 
 
 const getAllContractorsMonthlyReport = async (req, res) => {
@@ -619,16 +629,18 @@ const downloadAllContractorsReport = async (req, res) => {
         contractorData.contractorName.substring(0, 31)
       );
 
-      // ✅ UPDATED: Add 3 new columns
-      worksheet.columns = [
-        { header: 'Date', key: 'date', width: 12 },
-        { header: 'Article Name', key: 'articleName', width: 20 },
-        { header: 'Segment', key: 'segment', width: 12 },
-        { header: 'QR Generated', key: 'qrGeneratedCount', width: 12 },
-        { header: 'Bharra', key: 'bharra', width: 12 },
-        { header: 'Printing', key: 'printing', width: 12 },
-        { header: 'Packing', key: 'packing', width: 12 }
-      ];
+        worksheet.columns = [
+          { header: 'Date',           key: 'date',            width: 12 },
+          { header: 'Article Name',   key: 'articleName',     width: 20 },
+          { header: 'Segment',        key: 'segment',         width: 12 },
+          { header: 'QR Generated',   key: 'qrGeneratedCount',width: 12 },
+          { header: 'Bharra',         key: 'bharra',          width: 12 },
+          { header: 'Printing',       key: 'printing',        width: 12 },
+          { header: 'Packing',        key: 'packing',         width: 12 },
+          { header: 'Carton Pair',    key: 'cartonPair',      width: 14 }, 
+          { header: 'Color Printing', key: 'colorPrinting',   width: 14 }, 
+          { header: 'Imbozing',       key: 'imbozing',        width: 14 }, 
+        ];
 
       // Style header row
       const headerRow = worksheet.getRow(1);
@@ -638,7 +650,7 @@ const downloadAllContractorsReport = async (req, res) => {
 
       // Add contractor info
       const infoRow = worksheet.addRow({});
-      worksheet.mergeCells(`A${infoRow.number}:G${infoRow.number}`);
+      worksheet.mergeCells(`A${infoRow.number}:J${infoRow.number}`);
       infoRow.getCell('A').value = `Contractor: ${contractorData.contractorName}`;
       infoRow.font = { bold: true, size: 12 };
       infoRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E8E8' } };
@@ -646,25 +658,30 @@ const downloadAllContractorsReport = async (req, res) => {
       // Add data rows
       contractorData.records.forEach((record) => {
         worksheet.addRow({
-          date: new Date(record.date).toLocaleDateString('en-IN'),
-          articleName: record.articleName,
-          segment: record.segment || 'N/A',
+          date:             new Date(record.date).toLocaleDateString('en-IN'),
+          articleName:      record.articleName,
+          segment:          record.segment         || 'N/A',
           qrGeneratedCount: record.qrGeneratedCount,
-          bharra: record.bharra || 'N/A',
-          printing: record.printing || 'N/A',
-          packing: record.packing || 'N/A'
+          bharra:           record.bharra          || 'N/A',
+          printing:         record.printing        || 'N/A',
+          packing:          record.packing         || 'N/A',
+          cartonPair:       record.cartonPair      || 'N/A', 
+          colorPrinting:    record.colorPrinting   || 'N/A', 
+          imbozing:         record.imbozing        || 'N/A', 
         });
       });
 
-      // Add total row
       const totalRow = worksheet.addRow({
-        date: 'TOTAL',
-        articleName: '',
-        segment: '',
+        date:             'TOTAL',
+        articleName:      '',
+        segment:          '',
         qrGeneratedCount: contractorData.totalQRs,
-        bharra: '',
-        printing: '',
-        packing: ''
+        bharra:           '',
+        printing:         '',
+        packing:          '',
+        cartonPair:       '', 
+        colorPrinting:    '', 
+        imbozing:         '', 
       });
       totalRow.font = { bold: true };
       totalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFCCCCCC' } };

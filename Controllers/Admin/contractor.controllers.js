@@ -141,16 +141,19 @@ const trackQRGeneration = async (req, res) => {
 
 const generateQRCodes = async (req, res) => {
   try {
-    const { 
-      articleId, 
-      articleName, 
-      colors, 
-      sizes, 
-      numberOfQRs,
-      bharra,
-      printing,
-      packing
-    } = req.body;
+    const {
+    articleId,
+    articleName,
+    colors,
+    sizes,
+    numberOfQRs,
+    bharra,
+    printing,
+    packing,
+    cartonPair,    
+    colorPrinting, 
+    imbozing,     
+  } = req.body;
     
     const userId = req.user?.id;
     const contractorName = req.user?.name || 'Unknown Contractor';
@@ -281,11 +284,14 @@ const generateQRCodes = async (req, res) => {
       segment,
       batchId,
       {
-        bharra: bharra || null,
-        printing: printing || null,
-        packing: packing || null
+        bharra:        bharra        || null,
+        printing:      printing      || null,
+        packing:       packing       || null,
+        cartonPair:    cartonPair    || null,   
+        colorPrinting: colorPrinting || null,   
+        imbozing:      imbozing      || null,  
       },
-      numberOfQRs  // ✅ PASS TOTAL COUNT HERE (50, 100, etc.)
+      numberOfQRs
     );
 
     res.json({
@@ -317,68 +323,49 @@ const generateQRCodes = async (req, res) => {
 
 
 const downloadQRCodes = async (req, res) => {
-    try {
-        const { batchId, articleInfo } = req.query; // Get metadata from query params
+  try {
+    const { batchId, articleName } = req.body;
 
-        // Set response headers for streaming a zip file
-        res.setHeader('Content-Type', 'application/zip');
-        res.setHeader(
-            'Content-Disposition',
-            `attachment; filename="QR_Codes_${batchId || 'Batch'}_${Date.now()}.zip"`
-        );
-
-        const archive = archiver('zip', { zlib: { level: 9 } });
-
-        // Handle potential errors during archiving
-        archive.on('error', (err) => {
-            res.status(500).send({ error: 'Failed to create zip archive' });
-        });
-
-        // Pipe the archive stream directly to the response
-        archive.pipe(res);
-
-        // Process the incoming stream of QR code data
-        let qrCounter = 0;
-        const qrStream = new stream.Transform({
-            transform(chunk, encoding, callback) {
-                try {
-                    // Assuming each chunk is a JSON string of a QR code object
-                    const qrData = JSON.parse(chunk.toString());
-                    
-                    if (qrData.qrCodeImage) {
-                        const base64Data = qrData.qrCodeImage.replace(/^data:image\/png;base64,/, '');
-                        const buffer = Buffer.from(base64Data, 'base64');
-                        
-                        const cartonNum = qrData.cartonNumber || qrCounter++;
-                        const uniqueId = qrData.uniqueId || `qr_${qrCounter}`;
-                        
-                        const fileName = `QR_${articleInfo?.savedAsArticleName || 'Article'}_Carton_${String(cartonNum).padStart(3, '0')}_${uniqueId.slice(0, 8)}.png`;
-                        
-                        // Add QR code to the archive
-                        archive.append(buffer, { name: fileName });
-                    }
-                    callback();
-                } catch (error) {
-                    callback(error);
-                }
-            }
-        });
-
-        // Set up the pipeline: request -> qrStream (transform)
-        await pipeline(req, qrStream);
-
-        // Finalize the archive after the stream has been fully processed
-        await archive.finalize();
-
-    } catch (error) {
-        if (!res.headersSent) {
-            res.status(500).json({
-                result: false,
-                message: 'Failed to download QR codes',
-                error: error.message
-            });
-        }
+    if (!batchId) {
+      return res.status(400).json({ result: false, message: 'batchId is required' });
     }
+
+    // ✅ Query nested field
+    const qrCodes = await QRCode.find({ 'batchInfo.batchId': batchId }).lean();
+
+    if (!qrCodes.length) {
+      return res.status(404).json({ result: false, message: 'No QR codes found for this batch' });
+    }
+
+    const safeName = (articleName || 'Article').replace(/[^a-zA-Z0-9]/g, '_');
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="QR_${safeName}_${Date.now()}.zip"`);
+
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.on('error', (err) => { if (!res.headersSent) res.status(500).end(); });
+    archive.pipe(res);
+
+    for (let i = 0; i < qrCodes.length; i++) {
+      const qr = qrCodes[i];
+      if (!qr.qrImagePath) continue;  // ✅ correct field name
+
+      const base64Data = qr.qrImagePath.replace(/^data:image\/png;base64,/, ''); 
+      const buffer = Buffer.from(base64Data, 'base64');
+      const cartonNum = qr.contractorInput?.cartonNumber || i + 1;  // ✅
+      const fileName = `QR_${safeName}_Carton_${String(cartonNum).padStart(3, '0')}.png`;
+
+      archive.append(buffer, { name: fileName });
+    }
+
+    await archive.finalize();
+
+  } catch (error) {
+    console.error('Download error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ result: false, message: error.message });
+    }
+  }
 };
 
 const generateReceiptPdf = async (req, res) => {

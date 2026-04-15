@@ -58,7 +58,6 @@ const addProduct = async (req, res) => {
     let { segment, articleName, colors, sizes, variant, segmentKeywords, variantKeywords, articleKeywords } = req.body;
     let { gender } = req.body;
 
-    console.log(req.body);
 
 const genderArr = Array.isArray(gender)
   ? gender.map(g => g.trim().toLowerCase()).filter(Boolean)
@@ -327,8 +326,6 @@ const updateProduct = async (req, res) => {
 
     let { name, variantName, existingImages, segmentKeywords, variantKeywords, articleKeywords } = req.body;
     let { gender } = req.body;
-
-    console.log(req.body);
 
   const genderArr = Array.isArray(gender)
     ? gender.map(g => g.trim().toLowerCase()).filter(Boolean)

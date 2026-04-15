@@ -55,7 +55,7 @@ server.use("/api/v1/admin", adminRouter);
 server.use("/api/v1/distributor", userRouter);
 server.use("/api/v1/contractor", contractorRouter);
 server.use("/api/v1/warehouse", warehouseRouter);
-server.use("/api/v1/shipment", shipmentRouter);
+server.use("/api/v1/shipment", shipmentRouter)
 
 
 server.get("/api/v1/health", (req, res) => {
