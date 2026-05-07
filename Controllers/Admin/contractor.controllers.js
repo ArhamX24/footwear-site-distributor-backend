@@ -12,94 +12,98 @@ import QRTracker from "../../Models/QRTracker.model.js";
 
 const generateQRWithLabel = async (qrString, labelData) => {
   try {
-    // First generate pure QR code
-    const qrCodeDataURL = await QRCodeLib.toDataURL(qrString, {
-      width: 200,
-      margin: 2,
-      color: {
-        dark: '#000000',
-        light: '#FFFFFF'
-      },
-      errorCorrectionLevel: 'M'
-    });
-
-    // Format sizes properly
-    let sizesText = 'N/A';
+    // ── Canvas dimensions at 300 DPI for 50mm × 35mm sticker ─────────────
+    // 1mm = 11.811px at 300dpi
+    const W = 591;  // 50mm
+    const H = 413;  // 35mm
+ 
+    const canvas = createCanvas(W, H);
+    const ctx    = canvas.getContext('2d');
+ 
+    // ── White background ──────────────────────────────────────────────────
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, W, H);
+ 
+    // ── Format sizes as lowestXhighest ───────────────────────────────────
+    let sizesText = '';
     if (labelData.sizes) {
-      if (Array.isArray(labelData.sizes)) {
-        if (labelData.sizes.length === 1) {
-          sizesText = labelData.sizes[0].toString();
-        } else if (labelData.sizes.length > 1) {
-          const sorted = [...labelData.sizes].sort((a, b) => a - b);
-          sizesText = `${sorted[0]}X${sorted[sorted.length - 1]}`;
-        }
-      } else {
-        sizesText = labelData.sizes.toString();
+      if (Array.isArray(labelData.sizes) && labelData.sizes.length > 0) {
+        const nums   = labelData.sizes.map(Number).filter((n) => !isNaN(n));
+        const sorted = [...nums].sort((a, b) => a - b);
+        sizesText    = sorted.length === 1
+          ? sorted[0].toString()
+          : `${sorted[0]}X${sorted[sorted.length - 1]}`;
+      } else if (typeof labelData.sizes === 'string' && labelData.sizes.trim()) {
+        sizesText = labelData.sizes.trim();
       }
     }
-
-    // ✅ FIXED: Create canvas WITHOUT carton number (smaller height)
-    const canvas = createCanvas(280, 320); // Reduced from 350
-    const ctx = canvas.getContext('2d');
-
-    // White background
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(0, 0, 280, 320);
-
-    // Add labels at the top (NO CARTON NUMBER)
-    ctx.fillStyle = '#000000';
-    ctx.font = 'bold 14px Arial';
-    ctx.textAlign = 'center';
-
-    let yPos = 20;
-    
-    ctx.fillText(`Article: ${labelData.articleName}`, 140, yPos);
-    yPos += 20;
-    ctx.fillText(`Colors: ${labelData.colors}`, 140, yPos);
-    yPos += 20;
-    ctx.fillText(`Sizes: ${sizesText}`, 140, yPos);
-    yPos += 25;
-
-    // Add separator line
-    ctx.strokeStyle = '#cccccc';
-    ctx.lineWidth = 1;
+ 
+    // ── Header text ───────────────────────────────────────────────────────
+    // Font size: ~11px on 591px-wide canvas ≈ readable at 50mm physical
+    const FONT_SIZE  = 22;   // px on canvas (≈ 1.86mm at 300dpi — legible)
+    const LINE_H     = FONT_SIZE + 6;
+    const PADDING    = 10;
+ 
+    ctx.fillStyle  = '#000000';
+    ctx.font       = `bold ${FONT_SIZE}px Arial`;
+    ctx.textAlign  = 'left';
+    ctx.textBaseline = 'top';
+ 
+    let yPos = PADDING;
+ 
+    // Article name
+    const articleLabel = `Art: ${labelData.articleName || ''}`;
+    ctx.fillText(articleLabel, PADDING, yPos);
+    yPos += LINE_H;
+ 
+    // Size range
+    if (sizesText) {
+      const sizeLabel = `Size: ${sizesText}`;
+      ctx.fillText(sizeLabel, PADDING, yPos);
+      yPos += LINE_H;
+    }
+ 
+    // ── Thin separator line ───────────────────────────────────────────────
+    yPos += 4;
+    ctx.strokeStyle = '#bbbbbb';
+    ctx.lineWidth   = 1.5;
     ctx.beginPath();
-    ctx.moveTo(20, yPos);
-    ctx.lineTo(260, yPos);
+    ctx.moveTo(PADDING, yPos);
+    ctx.lineTo(W - PADDING, yPos);
     ctx.stroke();
-
-    yPos += 15;
-
-    // Load and add QR code
-    const qrImage = await loadImage(qrCodeDataURL);
-    ctx.drawImage(qrImage, 40, yPos, 200, 200);
-
-    yPos += 210;
-
-    // Add footer text
-    ctx.font = '10px Arial';
-    ctx.fillStyle = '#666666';
-    ctx.fillText('Scan to track', 140, yPos);
-
-    // Convert to data URL
-    const finalImage = canvas.toDataURL('image/png');
-    return finalImage;
-    
+    yPos += 6;
+ 
+    // ── QR code — fills remaining canvas space ────────────────────────────
+    const qrAreaH = H - yPos - PADDING;   // remaining height
+    const qrSize  = Math.min(W - PADDING * 2, qrAreaH);  // square, fits width
+ 
+    // Generate QR at exact pixel size needed — HIGH error correction for small print
+    const qrDataURL = await QRCodeLib.toDataURL(qrString, {
+      width:                qrSize,
+      margin:               1,          // minimal quiet zone (scanners need ~4 modules)
+      color:                { dark: '#000000', light: '#FFFFFF' },
+      errorCorrectionLevel: 'H',        // highest — survives small print size
+    });
+ 
+    const qrImage = await loadImage(qrDataURL);
+ 
+    // Centre QR horizontally in remaining space
+    const qrX = Math.floor((W - qrSize) / 2);
+    ctx.drawImage(qrImage, qrX, yPos, qrSize, qrSize);
+ 
+    return canvas.toDataURL('image/png');
+ 
   } catch (error) {
-
-    // Fallback to pure QR
+    console.error('QR label generation error:', error);
+    // ── Fallback: pure QR, no canvas ─────────────────────────────────────
     return await QRCodeLib.toDataURL(qrString, {
-      width: 200,
-      margin: 2,
-      color: {
-        dark: '#000000',
-        light: '#FFFFFF'
-      },
-      errorCorrectionLevel: 'M'
+      width:                400,
+      margin:               2,
+      color:                { dark: '#000000', light: '#FFFFFF' },
+      errorCorrectionLevel: 'H',
     });
   }
 };
-
 const trackQRGeneration = async (req, res) => {
   try {
     const { 

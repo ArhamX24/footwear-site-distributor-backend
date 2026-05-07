@@ -55,127 +55,117 @@ const parseField = (field) => {
 
 const addProduct = async (req, res) => {
   try {
-    let { segment, articleName, colors, sizes, variant, segmentKeywords, variantKeywords, articleKeywords } = req.body;
-    let { gender } = req.body;
-
-
-const genderArr = Array.isArray(gender)
-  ? gender.map(g => g.trim().toLowerCase()).filter(Boolean)
-  : typeof gender === 'string'
-    ? [gender.trim().toLowerCase()]
-    : [];
-
-    // Preserve casing, only trim
-    segment = segment?.trim();
-    variant = variant?.trim();
-    articleName = articleName?.trim();
-
-    const segmentKeywordsArr = parseField(req.body.segmentKeywords);
-    const variantKeywordsArr = parseField(req.body.variantKeywords);
-    const articleKeywordsArr = parseField(req.body.articleKeywords);
-
-    const colorsArr = Array.isArray(colors)
-      ? colors.map(c => c.trim()).filter(Boolean)
-      : typeof colors === 'string'
-        ? colors.split(',').map(c => c.trim()).filter(Boolean)
-        : [];
-
-    const sizesArr = Array.isArray(sizes)
-      ? sizes.map(s => s.trim()).filter(Boolean)
-      : typeof sizes === 'string'
-        ? sizes.split(',').map(s => s.trim()).filter(Boolean)
-        : [];
-
-    if (!req.files || req.files.length === 0) {
-      return res.status(statusCodes.badRequest).send({
-        result: false,
-        message: 'Please Upload At Least One Image'
-      });
+    const {
+      segment,
+      variant,
+      articleName,
+      gender,
+      sizes,
+      // ✅ keywords
+      segmentKeywords,
+      variantKeywords,
+      articleKeywords,
+    } = req.body;
+ 
+    // ── Parse colors from formData (multer sends repeated fields as array) ──
+    // req.body.colors can be:  undefined | string | string[]
+    let colorsRaw = req.body.colors;
+    let colorsArr = [];
+    if (colorsRaw) {
+      if (Array.isArray(colorsRaw)) {
+        colorsArr = colorsRaw.map((c) => c.trim().toLowerCase()).filter(Boolean);
+      } else {
+        // single value sent as string
+        colorsArr = colorsRaw
+          .split(',')
+          .map((c) => c.trim().toLowerCase())
+          .filter(Boolean);
+      }
     }
-
-    const uploadPromises = req.files.map(file => uploadOnImgBB(file.path));
-    let uploadResults;
-
-    try {
-      uploadResults = await Promise.all(uploadPromises);
-    } catch (uploadError) {
-      return res.status(statusCodes.badRequest).send({
-        result: false,
-        message: 'One or more images failed to upload. Please try again later'
-      });
+ 
+    // ── Parse gender ──────────────────────────────────────────────────────────
+    let genderArr = [];
+    if (gender) {
+      genderArr = Array.isArray(gender) ? gender : [gender];
     }
-
-    const imageUrls = uploadResults
-      .filter(result => result?.secure_url)
-      .map(result => result.secure_url);
-
+ 
+    // ── Parse sizes ───────────────────────────────────────────────────────────
+    let sizesArr = [];
+    if (sizes) {
+      sizesArr = Array.isArray(sizes) ? sizes : [sizes];
+    }
+ 
+    // ── Parse keywords ────────────────────────────────────────────────────────
+    const parseKw = (raw) =>
+      raw
+        ? raw.split(',').map((k) => k.trim().toLowerCase()).filter(Boolean)
+        : [];
+ 
+    const segKw = parseKw(segmentKeywords);
+    const varKw = parseKw(variantKeywords);
+    const artKw = parseKw(articleKeywords);
+ 
+    // ── Upload images to ImgBB ────────────────────────────────────────────────
+    let imageUrls = [];
+    if (req.files && req.files.length > 0) {
+      const uploadPromises = req.files.map((file) => uploadOnImgBB(file.path));
+      const results        = await Promise.all(uploadPromises);
+      imageUrls            = results
+        .filter((r) => r?.secure_url)
+        .map((r) => r.secure_url);
+    }
+ 
     if (imageUrls.length === 0) {
-      return res.status(statusCodes.badRequest).send({
-        result: false,
-        message: 'No valid images uploaded'
+      return res.status(400).json({
+        result:  false,
+        message: 'At least one image is required',
       });
     }
-
-    // ✅ All keywords stored at article level only
+ 
+    // ── Build article object ──────────────────────────────────────────────────
     const newArticle = {
-      name: articleName,
-      images: imageUrls,
-      gender: genderArr,
-      colors: colorsArr,
-      sizes: sizesArr,
-      segmentKeywords: segmentKeywordsArr,
-      variantKeywords: variantKeywordsArr,
-      articleKeywords: articleKeywordsArr,
+      name:            articleName,
+      images:          imageUrls,
+      gender:          genderArr,
+      colors:          colorsArr,       // ✅ stored
+      sizes:           sizesArr,
+      segmentKeywords: segKw,
+      variantKeywords: varKw,
+      articleKeywords: artKw,
     };
-
-    // Case-insensitive segment lookup
-    let existingSegment = await productModel.findOne({
-      segment: { $regex: new RegExp(`^${segment}$`, 'i') }
+ 
+    // ── Find or create Product → Variant → push article ──────────────────────
+    let product = await productModel.findOne({
+      segment: { $regex: `^${segment}$`, $options: 'i' },
     });
-
-    if (!existingSegment) {
-      // Brand new segment
-      await productModel.create({
-        segment,
-        variants: [{
-          name: variant,
-          articles: [newArticle]
-        }]
-      });
-      return res.status(statusCodes.success).send({
-        result: true,
-        message: 'Segment, variant, and article created successfully'
-      });
+ 
+    if (!product) {
+      product = new Product({ segment, variants: [] });
     }
-
-    // Existing segment — find or create variant (case-insensitive)
-    let variantIndex = existingSegment.variants.findIndex(
-      v => v.name?.toLowerCase() === variant?.toLowerCase()
+ 
+    const variantName  = variant || 'General';
+    let   variantDoc   = product.variants.find(
+      (v) => v.name.toLowerCase() === variantName.toLowerCase()
     );
-
-    if (variantIndex === -1) {
-      // New variant under existing segment
-      existingSegment.variants.push({
-        name: variant,
-        articles: [newArticle]
-      });
+ 
+    if (!variantDoc) {
+      product.variants.push({ name: variantName, articles: [newArticle] });
     } else {
-      // Existing variant — just push the new article
-      existingSegment.variants[variantIndex].articles.push(newArticle);
+      variantDoc.articles.push(newArticle);
     }
-
-    await existingSegment.save();
-    return res.status(statusCodes.success).send({
-      result: true,
-      message: 'Article added successfully'
+ 
+    await product.save();
+ 
+    return res.status(200).json({
+      result:  true,
+      message: 'Product added successfully',
     });
-
   } catch (error) {
-    console.error('Error in addProduct:', error);
-    return res.status(statusCodes.serverError).send({
-      result: false,
-      message: 'Error adding product. Please try again later',
-      error: error.message
+    console.error('addProduct error:', error);
+    return res.status(500).json({
+      result:  false,
+      message: 'Failed to add product',
+      error:   error.message,
     });
   }
 };
@@ -269,178 +259,176 @@ const importProductsFromExcel = async (req, res) => {
 
 const deleteProduct = async (req, res) => {
   try {
-    const { productid } = req.params;
-
-    // 1. Is it a top-level product?
-    const productDoc = await productModel.findById(productid);
-    if (productDoc) {
-      // Remove the entire product document
-      await productModel.findByIdAndDelete(productid);
-      return res.status(statusCodes.success).send({
-        result: true,
-        message: 'Product deleted'
-      });
+    const { id } = req.params;
+    const mongoose = await import('mongoose');
+    const objectId = new mongoose.default.Types.ObjectId(id);
+ 
+    const product = await Product.findOne({ 'variants.articles._id': objectId });
+ 
+    if (!product) {
+      return res.status(404).json({ result: false, message: 'Article not found' });
     }
-
-    // 2. Otherwise, try to delete a nested article by its id
-    // Find the product that contains this article
-    const parent = await productModel.findOne({ 'variants.articles._id': productid });
-
-    if (!parent) {
-      return res.status(statusCodes.notFound).send({
-        result: false,
-        message: 'No product or article found'
-      });
+ 
+    for (const variant of product.variants) {
+      const idx = variant.articles.findIndex(
+        (a) => a._id.toString() === objectId.toString()
+      );
+      if (idx !== -1) {
+        variant.articles.splice(idx, 1);
+        break;
+      }
     }
-
-    // Pull out the matching article from its variant
-    await productModel.updateOne(
-      { _id: parent._id },
-      { $pull: { 'variants.$[].articles': { _id: productid } } }
-    );
-
-    return res.status(statusCodes.success).send({
-      result: true,
-      message: 'Article deleted'
-    });
-
+ 
+    // Remove empty variants
+    product.variants = product.variants.filter((v) => v.articles.length > 0);
+ 
+    await product.save();
+ 
+    return res.status(200).json({ result: true, message: 'Article deleted' });
   } catch (error) {
-    return res.status(statusCodes.serverError).send({
-      result: false,
-      message: 'Error deleting. Please try again later.',
-      error: error.message
+    return res.status(500).json({
+      result:  false,
+      message: 'Failed to delete product',
+      error:   error.message,
     });
   }
 };
 
 const updateProduct = async (req, res) => {
   try {
-    let productid = req.params.productid || req.params.id || req.params.articleId || req.body.articleId || req.body.id;
-
-    if (!productid) {
-      return res.status(statusCodes.badRequest).send({
-        result: false,
-        message: 'Article ID is required'
-      });
+    const {
+      articleId,
+      name,
+      segment,
+      variantName,
+      existingImages,   // JSON string of already-stored image URLs to keep
+      gender,
+      segmentKeywords,
+      variantKeywords,
+      articleKeywords,
+    } = req.body;
+ 
+    if (!articleId) {
+      return res.status(400).json({ result: false, message: 'articleId is required' });
     }
-
-    let { name, variantName, existingImages, segmentKeywords, variantKeywords, articleKeywords } = req.body;
-    let { gender } = req.body;
-
-  const genderArr = Array.isArray(gender)
-    ? gender.map(g => g.trim().toLowerCase()).filter(Boolean)
-    : typeof gender === 'string'
-      ? [gender.trim().toLowerCase()]
-      : [];
-
-    // Preserve casing, only trim
-    name = name?.trim();
-    variantName = variantName?.trim();
-
-    const segmentKeywordsArr = parseField(req.body.segmentKeywords);
-    const variantKeywordsArr = parseField(req.body.variantKeywords);
-    const articleKeywordsArr = parseField(req.body.articleKeywords);
-
-    // Parse existing images
-    let existingImagesArr = [];
-    if (existingImages) {
-      if (typeof existingImages === 'string') {
-        try {
-          existingImagesArr = JSON.parse(existingImages);
-        } catch (e) {
-          existingImagesArr = [];
-        }
-      } else if (Array.isArray(existingImages)) {
-        existingImagesArr = existingImages;
+ 
+    // ── Parse colors ──────────────────────────────────────────────────────────
+    let colorsRaw = req.body.colors;
+    let colorsArr = [];
+    if (colorsRaw) {
+      if (Array.isArray(colorsRaw)) {
+        colorsArr = colorsRaw.map((c) => c.trim().toLowerCase()).filter(Boolean);
+      } else {
+        colorsArr = colorsRaw
+          .split(',')
+          .map((c) => c.trim().toLowerCase())
+          .filter(Boolean);
       }
     }
-
-    // Find the article by ID across all products
-    const allProducts = await productModel.find();
-    let targetProduct = null;
-    let targetVariantIndex = -1;
-    let targetArticleIndex = -1;
-
-    for (let pIndex = 0; pIndex < allProducts.length; pIndex++) {
-      const product = allProducts[pIndex];
-      for (let vIndex = 0; vIndex < product.variants.length; vIndex++) {
-        const variant = product.variants[vIndex];
-        for (let aIndex = 0; aIndex < variant.articles.length; aIndex++) {
-          if (variant.articles[aIndex]._id.toString() === productid) {
-            targetProduct = product;
-            targetVariantIndex = vIndex;
-            targetArticleIndex = aIndex;
-            break;
-          }
-        }
-        if (targetProduct) break;
-      }
-      if (targetProduct) break;
+ 
+    // ── Parse gender ──────────────────────────────────────────────────────────
+    let genderArr = [];
+    if (gender) {
+      genderArr = Array.isArray(gender) ? gender : [gender];
     }
-
-    if (!targetProduct || targetVariantIndex === -1 || targetArticleIndex === -1) {
-      return res.status(statusCodes.notFound).send({
-        result: false,
-        message: 'Article not found in database'
-      });
+ 
+    // ── Parse keywords ────────────────────────────────────────────────────────
+    const parseKw = (raw) =>
+      raw
+        ? raw.split(',').map((k) => k.trim().toLowerCase()).filter(Boolean)
+        : [];
+ 
+    const segKw = parseKw(segmentKeywords);
+    const varKw = parseKw(variantKeywords);
+    const artKw = parseKw(articleKeywords);
+ 
+    // ── Keep existing images + upload new ones ────────────────────────────────
+    let keptImages = [];
+    try {
+      keptImages = existingImages ? JSON.parse(existingImages) : [];
+    } catch {
+      keptImages = [];
     }
-
-    // Handle new image uploads
+ 
     let newImageUrls = [];
     if (req.files && req.files.length > 0) {
-      const uploadPromises = req.files.map(file => uploadOnImgBB(file.path));
-      try {
-        const uploadResults = await Promise.all(uploadPromises);
-        newImageUrls = uploadResults
-          .filter(result => result?.secure_url)
-          .map(result => result.secure_url);
-      } catch (uploadError) {
-        return res.status(statusCodes.badRequest).send({
-          result: false,
-          message: 'Image upload failed'
-        });
-      }
+      const results = await Promise.all(
+        req.files.map((f) => uploadOnImgBB(f.path))
+      );
+      newImageUrls = results
+        .filter((r) => r?.secure_url)
+        .map((r) => r.secure_url);
     }
-
-    const allImages = [...existingImagesArr, ...newImageUrls];
-    if (allImages.length === 0) {
-      return res.status(statusCodes.badRequest).send({
-        result: false,
-        message: 'At least one image required'
+ 
+    const finalImages = [...keptImages, ...newImageUrls];
+ 
+    if (finalImages.length === 0) {
+      return res.status(400).json({
+        result:  false,
+        message: 'At least one image is required',
       });
     }
-
-    // ✅ Update article fields only — keywords fully scoped to this article
-    const targetArticle = targetProduct.variants[targetVariantIndex].articles[targetArticleIndex];
-
-    if (name) targetArticle.name = name;
-    if (genderArr.length > 0) targetArticle.gender = genderArr;
-    targetArticle.images = allImages;
-    targetArticle.segmentKeywords = segmentKeywordsArr;
-    targetArticle.variantKeywords = variantKeywordsArr;
-    targetArticle.articleKeywords = articleKeywordsArr;
-
-    // Update variant name if changed
-    if (variantName) {
-      targetProduct.variants[targetVariantIndex].name = variantName;
-    }
-
-    await targetProduct.save();
-
-    return res.status(statusCodes.success).send({
-      result: true,
-      message: 'Article updated successfully!'
+ 
+    // ── Find the product containing this article ──────────────────────────────
+    const mongoose = await import('mongoose');
+    const objectId = new mongoose.default.Types.ObjectId(articleId);
+ 
+    const product = await productModel.findOne({
+      'variants.articles._id': objectId,
     });
-
+ 
+    if (!product) {
+      return res.status(404).json({ result: false, message: 'Article not found' });
+    }
+ 
+    // ── Locate and update the article inside nested arrays ────────────────────
+    let updated = false;
+    for (const variant of product.variants) {
+      const article = variant.articles.id(objectId);
+      if (article) {
+        article.name            = name            || article.name;
+        article.gender          = genderArr.length ? genderArr : article.gender;
+        article.colors          = colorsArr;           // ✅ always overwrite (even empty = clear)
+        article.images          = finalImages;
+        article.segmentKeywords = segKw;
+        article.variantKeywords = varKw;
+        article.articleKeywords = artKw;
+ 
+        // Update variant name if changed
+        if (variantName && variant.name !== variantName) {
+          variant.name = variantName;
+        }
+ 
+        // Update segment if changed
+        if (segment && product.segment !== segment) {
+          product.segment = segment;
+        }
+ 
+        updated = true;
+        break;
+      }
+    }
+ 
+    if (!updated) {
+      return res.status(404).json({ result: false, message: 'Article not found in variants' });
+    }
+ 
+    await product.save();
+ 
+    return res.status(200).json({
+      result:  true,
+      message: 'Product updated successfully',
+    });
   } catch (error) {
-    console.error('Error in updateProduct:', error);
-    return res.status(statusCodes.serverError).send({
-      result: false,
-      message: 'Server error',
-      error: error.message
+    console.error('updateProduct error:', error);
+    return res.status(500).json({
+      result:  false,
+      message: 'Failed to update product',
+      error:   error.message,
     });
   }
 };
+ 
 
 const getAllProducts = async (req, res) => {
   try {
@@ -612,18 +600,29 @@ const addBestDeals = async (req, res) => {
 
 const getDeals = async (req, res) => {
   try {
-    const allDeals = await dealsModel.find({ isActive: true }).sort({ createdAt: -1 });
-    return res.status(statusCodes.success).send({
-      result: true,
-      message: allDeals.length ? 'Found All Offers' : 'No Active Offers',
-      data: allDeals
+    const products = await Product.find({ 'variants.articles.indeal': true }).lean();
+    const deals    = [];
+ 
+    products.forEach((product) => {
+      product.variants?.forEach((variant) => {
+        variant.articles?.forEach((article) => {
+          if (article.indeal) {
+            deals.push({
+              _id:        article._id,
+              name:       article.name,
+              segment:    product.segment,
+              variantName:variant.name,
+              images:     article.images || [],
+              deal:       article.deal   || {},
+            });
+          }
+        });
+      });
     });
+ 
+    return res.status(200).json({ result: true, data: deals });
   } catch (error) {
-
-    return res.status(statusCodes.serverError).send({
-      result: false,
-      message: 'Error in Getting Offers. Please Try Again Later'
-    });
+    return res.status(500).json({ result: false, message: 'Failed to fetch deals' });
   }
 };
 

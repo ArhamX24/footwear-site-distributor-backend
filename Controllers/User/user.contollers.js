@@ -237,174 +237,6 @@ try {
   }
 }
 
-const getAllProducts = async (req, res) => {
-  try {
-    let { page = 1, limit = 12, search = "" } = req.query;
-    let { filterName = [], filterOption = [] } = req.query;
-
-    try {
-      filterName = JSON.parse(filterName);
-      filterOption = JSON.parse(filterOption);
-    } catch {
-      filterName = [];
-      filterOption = [];
-    }
-
-    const pageNum = Number(page);
-    const limitNum = Number(limit);
-    const skip = (pageNum - 1) * limitNum;
-
-    // Build match conditions
-    const match = {};
-
-    filterName.forEach((key, i) => {
-      const vals = Array.isArray(filterOption[i]) ? filterOption[i] : [filterOption[i]].filter(v => v);
-      if (!vals.length) return;
-
-      if (key === "segment") {
-        match.segment = { $in: vals };
-      } else if (key === "variant" || key === "variants") {
-        if (!match["variants.name"]) match["variants.name"] = { $in: [] };
-        match["variants.name"].$in.push(...vals);
-      } else if (key === "gender") {
-        if (!match["variants.articles.gender"]) match["variants.articles.gender"] = { $in: [] };
-        match["variants.articles.gender"].$in.push(...vals);
-      }
-    });
-
-    // ✅ CRITICAL: Build optimized pipeline with EARLY pagination
-    const pipeline = [];
-
-    // 1. Apply filters first
-    if (Object.keys(match).length) {
-      pipeline.push({ $match: match });
-    }
-
-    // 2. ✅ APPLY SKIP AND LIMIT IMMEDIATELY (before any processing)
-    pipeline.push(
-      { $skip: skip },
-      { $limit: limitNum }
-    );
-
-    // 3. Filter variants if needed
-    if (match["variants.name"]) {
-      pipeline.push({
-        $addFields: {
-          variants: {
-            $filter: {
-              input: "$variants",
-              as: "v",
-              cond: { $in: ["$$v.name", match["variants.name"].$in] }
-            }
-          }
-        }
-      });
-    }
-
-    // 4. Filter articles if needed
-    if (match["variants.articles.gender"]) {
-      pipeline.push({
-        $addFields: {
-          variants: {
-            $map: {
-              input: "$variants",
-              as: "v",
-              in: {
-                name: "$$v.name",
-                keywords: "$$v.keywords",
-                articles: {
-                  $filter: {
-                    input: "$$v.articles",
-                    as: "a",
-                    cond: { $in: ["$$a.gender", match["variants.articles.gender"].$in] }
-                  }
-                }
-              }
-            }
-          }
-        }
-      });
-    }
-
-    // 5. Lightweight inventory lookup (optional - can be removed for even faster loading)
-    pipeline.push(
-      {
-        $lookup: {
-          from: "inventories",
-          localField: "_id",
-          foreignField: "productId",
-          as: "inventoryData"
-        }
-      },
-      {
-        $addFields: {
-          variants: {
-            $map: {
-              input: "$variants",
-              as: "variant",
-              in: {
-                name: "$$variant.name",
-                keywords: "$$variant.keywords",
-                articles: {
-                  $map: {
-                    input: "$$variant.articles",
-                    as: "article",
-                    in: {
-                      _id: "$$article._id",
-                      name: "$$article.name",
-                      images: "$$article.images",
-                      gender: "$$article.gender",
-                      keywords: "$$article.keywords",
-                      // Simplified - just check if has inventory
-                      hasInventory: {
-                        $gt: [
-                          {
-                            $size: {
-                              $filter: {
-                                input: { $ifNull: [{ $arrayElemAt: ["$inventoryData.items", 0] }, []] },
-                                as: "inv",
-                                cond: { $eq: ["$$inv.articleName", "$$article.name"] }
-                              }
-                            }
-                          },
-                          0
-                        ]
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      },
-      { $unset: "inventoryData" }
-    );
-
-    const results = await productModel.aggregate(pipeline);
-
-    return res.status(200).json({
-      result: !!results.length,
-      message: results.length ? "Products fetched" : "No products found",
-      data: results,
-      pagination: {
-        page: pageNum,
-        limit: limitNum,
-        hasMore: results.length === limitNum,
-        count: results.length
-      }
-    });
-
-  } catch (err) {
-   
-    res.status(500).json({
-      result: false,
-      message: "Error fetching products",
-      error: err.message
-    });
-  }
-};
-
 
 
 const fetchFilters = async (req, res) => {
@@ -571,45 +403,98 @@ const fetchArticleDetailsFromInventory = async (req, res) => {
 };
 
 
-
 const searchProducts = async (req, res) => {
   try {
-    let { page = 1, limit = 12, search = "" } = req.query;
-    
-    const pageNum = Number(page);
+    let { page = 1, limit = 12, search = "", segment = "" } = req.query;
+ 
+    const pageNum  = Number(page);
     const limitNum = Number(limit);
-    const skip = (pageNum - 1) * limitNum;
-    
+    const skip     = (pageNum - 1) * limitNum;
+ 
     if (!search || !search.trim()) {
       return res.status(200).json({
         result: false,
         message: "Search query required",
         data: [],
-        pagination: { page: pageNum, limit: limitNum, hasMore: false }
+        pagination: { page: pageNum, limit: limitNum, hasMore: false },
       });
     }
-
-    const searchTerm = search.trim();
-    
-    // ✅ OPTIMIZED: Pagination first, then process
+ 
+    // ── Normalise: strip hyphens so "pl-440" matches "pl440" ────────────────
+    const tokenToFlexRegex = (token) =>
+      // Insert optional hyphen between every character
+      token.split("").join("-?");
+ 
+    const normalise = (str) =>
+      str.toLowerCase().replace(/-/g, "").replace(/\s+/g, " ").trim();
+ 
+    const tokens = normalise(search).split(" ").filter(Boolean);
+ 
+    // Each token must match at least one searchable field (AND across tokens)
+    const buildTokenMatch = (token) => {
+      const rx = tokenToFlexRegex(token);
+      return {
+        $or: [
+          { segment:                             { $regex: rx, $options: "i" } },
+          { keywords:                            { $elemMatch: { $regex: rx, $options: "i" } } },
+          { "variants.name":                     { $regex: rx, $options: "i" } },
+          { "variants.keywords":                 { $elemMatch: { $regex: rx, $options: "i" } } },
+          { "variants.articles.name":            { $regex: rx, $options: "i" } },
+          { "variants.articles.gender":          { $regex: rx, $options: "i" } },
+          { "variants.articles.keywords":        { $elemMatch: { $regex: rx, $options: "i" } } },
+          { "variants.articles.articleKeywords": { $elemMatch: { $regex: rx, $options: "i" } } },
+          { "variants.articles.segmentKeywords": { $elemMatch: { $regex: rx, $options: "i" } } },
+          { "variants.articles.variantKeywords": { $elemMatch: { $regex: rx, $options: "i" } } },
+        ],
+      };
+    };
+ 
+    const matchStage = {
+      $and: [
+        // Scope to active segment pill if provided
+        ...(segment
+          ? [{ segment: { $regex: `^${segment}$`, $options: "i" } }]
+          : []),
+        // ALL tokens must match somewhere in the document
+        ...tokens.map(buildTokenMatch),
+      ],
+    };
+ 
+    // Build per-token article-level $or conditions for the $filter stage
+    // (article survives if it matches at least one token at article/variant/segment level)
+    const articleFilterOr = tokens.flatMap((token) => {
+      const rx = tokenToFlexRegex(token);
+      return [
+        { $regexMatch: { input: "$$article.name",   regex: rx, options: "i" } },
+        // gender is stored as [String] — check if any element matches
+        {
+          $gt: [
+            {
+              $size: {
+                $filter: {
+                  input: { $ifNull: ["$$article.gender", []] },
+                  as: "g",
+                  cond: { $regexMatch: { input: "$$g", regex: rx, options: "i" } },
+                },
+              },
+            },
+            0,
+          ],
+        },
+        { $regexMatch: { input: "$segment",       regex: rx, options: "i" } },
+        { $regexMatch: { input: "$$variant.name", regex: rx, options: "i" } },
+      ];
+    });
+ 
     const pipeline = [
-      {
-        $match: {
-          $or: [
-            { segment: { $regex: searchTerm, $options: "i" } },
-            { keywords: { $elemMatch: { $regex: searchTerm, $options: "i" } } },
-            { "variants.name": { $regex: searchTerm, $options: "i" } },
-            { "variants.keywords": { $elemMatch: { $regex: searchTerm, $options: "i" } } },
-            { "variants.articles.name": { $regex: searchTerm, $options: "i" } },
-            { "variants.articles.gender": { $regex: searchTerm, $options: "i" } },
-            { "variants.articles.keywords": { $elemMatch: { $regex: searchTerm, $options: "i" } } }
-          ]
-        }
-      },
-      // ✅ EARLY PAGINATION
+      // ── 1. MATCH FIRST (fixes "Croxxy always on top" bug) ────────────────
+      { $match: matchStage },
+ 
+      // ── 2. Paginate AFTER matching ────────────────────────────────────────
       { $skip: skip },
       { $limit: limitNum },
-      // Filter matching articles
+ 
+      // ── 3. Keep only articles that are relevant to the search ─────────────
       {
         $addFields: {
           variants: {
@@ -617,107 +502,279 @@ const searchProducts = async (req, res) => {
               input: "$variants",
               as: "variant",
               in: {
-                name: "$$variant.name",
+                name:     "$$variant.name",
                 keywords: "$$variant.keywords",
                 articles: {
                   $filter: {
                     input: "$$variant.articles",
-                    as: "article",
-                    cond: {
-                      $or: [
-                        { $regexMatch: { input: "$$article.name", regex: searchTerm, options: "i" } },
-                        { $regexMatch: { input: "$$article.gender", regex: searchTerm, options: "i" } },
-                        { $regexMatch: { input: "$segment", regex: searchTerm, options: "i" } },
-                        { $regexMatch: { input: "$$variant.name", regex: searchTerm, options: "i" } }
-                      ]
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
+                    as:    "article",
+                    cond:  { $or: articleFilterOr },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
-      // Remove empty variants
+ 
+      // ── 4. Drop variants that have no matching articles ───────────────────
       {
         $addFields: {
           variants: {
             $filter: {
               input: "$variants",
-              as: "v",
-              cond: { $gt: [{ $size: "$$v.articles" }, 0] }
-            }
-          }
-        }
+              as:    "v",
+              cond:  { $gt: [{ $size: "$$v.articles" }, 0] },
+            },
+          },
+        },
       },
       { $match: { "variants.0": { $exists: true } } },
-      // Lightweight inventory
+ 
+      // ── 5. Inventory lookup ───────────────────────────────────────────────
       {
         $lookup: {
-          from: "inventories",
-          localField: "_id",
+          from:         "inventories",
+          localField:   "_id",
           foreignField: "productId",
-          as: "inventoryData"
-        }
+          as:           "inventoryData",
+        },
       },
       {
         $addFields: {
           variants: {
             $map: {
               input: "$variants",
-              as: "variant",
+              as:    "variant",
               in: {
                 name: "$$variant.name",
                 articles: {
                   $map: {
                     input: "$$variant.articles",
-                    as: "article",
+                    as:    "article",
                     in: {
-                      _id: "$$article._id",
-                      name: "$$article.name",
+                      _id:    "$$article._id",
+                      name:   "$$article.name",
                       images: "$$article.images",
                       gender: "$$article.gender",
                       hasInventory: {
                         $gt: [
-                          { $size: { $filter: { input: { $ifNull: [{ $arrayElemAt: ["$inventoryData.items", 0] }, []] }, as: "inv", cond: { $eq: ["$$inv.articleName", "$$article.name"] } } } },
-                          0
-                        ]
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
+                          {
+                            $size: {
+                              $filter: {
+                                input: { $ifNull: [{ $arrayElemAt: ["$inventoryData.items", 0] }, []] },
+                                as:    "inv",
+                                cond:  { $eq: ["$$inv.articleName", "$$article.name"] },
+                              },
+                            },
+                          },
+                          0,
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
-      { $unset: "inventoryData" }
+      { $unset: "inventoryData" },
     ];
-
+ 
     const results = await productModel.aggregate(pipeline);
-
+ 
     return res.status(200).json({
-      result: !!results.length,
+      result:  !!results.length,
       message: results.length ? "Products found" : "No matches",
-      data: results,
+      data:    results,
       pagination: {
-        page: pageNum,
-        limit: limitNum,
+        page:    pageNum,
+        limit:   limitNum,
         hasMore: results.length === limitNum,
-        count: results.length
-      }
+        count:   results.length,
+      },
     });
-
   } catch (err) {
-
-    res.status(500).json({
-      result: false,
-      message: "Search failed",
-      error: err.message
-    });
+    res.status(500).json({ result: false, message: "Search failed", error: err.message });
   }
 };
+ 
 
+const getAllProducts = async (req, res) => {
+  try {
+    let { page = 1, limit = 12 } = req.query;
+    let { filterName = [], filterOption = [] } = req.query;
+ 
+    try {
+      filterName   = JSON.parse(filterName);
+      filterOption = JSON.parse(filterOption);
+    } catch {
+      filterName   = [];
+      filterOption = [];
+    }
+ 
+    const pageNum  = Number(page);
+    const limitNum = Number(limit);
+    const skip     = (pageNum - 1) * limitNum;
+ 
+    // ── Collect active filter values ─────────────────────────────────────────
+    let segmentVals = [];
+    let genderVals  = [];
+    // (variant filter kept for future use)
+ 
+    filterName.forEach((key, i) => {
+      const vals = Array.isArray(filterOption[i])
+        ? filterOption[i]
+        : [filterOption[i]].filter(Boolean);
+      if (!vals.length) return;
+ 
+      if (key === "segment")             segmentVals = vals;
+      else if (key === "gender")         genderVals  = vals;
+    });
+ 
+    // ── Top-level $match (only fields that exist at product level) ───────────
+    const topMatch = {};
+    if (segmentVals.length) topMatch.segment = { $in: segmentVals };
+ 
+    const pipeline = [];
+ 
+    if (Object.keys(topMatch).length) {
+      pipeline.push({ $match: topMatch });
+    }
+ 
+    // ── Paginate BEFORE per-article processing for performance ───────────────
+    pipeline.push({ $skip: skip }, { $limit: limitNum });
+ 
+    // ── Gender filter: article.gender is [String], so use $filter + $size ───
+    if (genderVals.length) {
+      pipeline.push({
+        $addFields: {
+          variants: {
+            $map: {
+              input: "$variants",
+              as:    "variant",
+              in: {
+                name:     "$$variant.name",
+                keywords: "$$variant.keywords",
+                articles: {
+                  $filter: {
+                    input: "$$variant.articles",
+                    as:    "article",
+                    // Keep article if its gender array contains ANY selected gender
+                    cond: {
+                      $gt: [
+                        {
+                          $size: {
+                            $filter: {
+                              input: { $ifNull: ["$$article.gender", []] },
+                              as:    "g",
+                              cond:  {
+                                $in: [
+                                  { $toLower: "$$g" },
+                                  genderVals.map((v) => v.toLowerCase()),
+                                ],
+                              },
+                            },
+                          },
+                        },
+                        0,
+                      ],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+ 
+      // Drop variants left with no articles after gender filter
+      pipeline.push({
+        $addFields: {
+          variants: {
+            $filter: {
+              input: "$variants",
+              as:    "v",
+              cond:  { $gt: [{ $size: "$$v.articles" }, 0] },
+            },
+          },
+        },
+      });
+ 
+      pipeline.push({ $match: { "variants.0": { $exists: true } } });
+    }
+ 
+    // ── Inventory lookup ─────────────────────────────────────────────────────
+    pipeline.push(
+      {
+        $lookup: {
+          from:         "inventories",
+          localField:   "_id",
+          foreignField: "productId",
+          as:           "inventoryData",
+        },
+      },
+      {
+        $addFields: {
+          variants: {
+            $map: {
+              input: "$variants",
+              as:    "variant",
+              in: {
+                name:     "$$variant.name",
+                keywords: "$$variant.keywords",
+                articles: {
+                  $map: {
+                    input: "$$variant.articles",
+                    as:    "article",
+                    in: {
+                      _id:    "$$article._id",
+                      name:   "$$article.name",
+                      images: "$$article.images",
+                      gender: "$$article.gender",
+                      hasInventory: {
+                        $gt: [
+                          {
+                            $size: {
+                              $filter: {
+                                input: { $ifNull: [{ $arrayElemAt: ["$inventoryData.items", 0] }, []] },
+                                as:    "inv",
+                                cond:  { $eq: ["$$inv.articleName", "$$article.name"] },
+                              },
+                            },
+                          },
+                          0,
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      { $unset: "inventoryData" }
+    );
+ 
+    const results = await productModel.aggregate(pipeline);
+ 
+    return res.status(200).json({
+      result:  !!results.length,
+      message: results.length ? "Products fetched" : "No products found",
+      data:    results,
+      pagination: {
+        page:    pageNum,
+        limit:   limitNum,
+        hasMore: results.length === limitNum,
+        count:   results.length,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ result: false, message: "Error fetching products", error: err.message });
+  }
+};
 const getCombinedOffers = async (req, res) => {
     try {
         const currentDate = new Date();
