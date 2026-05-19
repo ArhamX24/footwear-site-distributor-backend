@@ -263,7 +263,7 @@ const deleteProduct = async (req, res) => {
     const mongoose = await import('mongoose');
     const objectId = new mongoose.default.Types.ObjectId(id);
  
-    const product = await Product.findOne({ 'variants.articles._id': objectId });
+    const product = await productModel.findOne({ 'variants.articles._id': objectId });
  
     if (!product) {
       return res.status(404).json({ result: false, message: 'Article not found' });
@@ -280,7 +280,7 @@ const deleteProduct = async (req, res) => {
     }
  
     // Remove empty variants
-    product.variants = product.variants.filter((v) => v.articles.length > 0);
+    product.variants = productModel.variants.filter((v) => v.articles.length > 0);
  
     await product.save();
  
@@ -600,7 +600,7 @@ const addBestDeals = async (req, res) => {
 
 const getDeals = async (req, res) => {
   try {
-    const products = await Product.find({ 'variants.articles.indeal': true }).lean();
+    const products = await productModel.find({ 'variants.articles.indeal': true }).lean();
     const deals    = [];
  
     products.forEach((product) => {
