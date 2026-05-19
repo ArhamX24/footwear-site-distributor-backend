@@ -259,9 +259,10 @@ const importProductsFromExcel = async (req, res) => {
 
 const deleteProduct = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { productid  } = req.params;
+
     const mongoose = await import('mongoose');
-    const objectId = new mongoose.default.Types.ObjectId(id);
+    const objectId = new mongoose.default.Types.ObjectId(productid);
  
     const product = await productModel.findOne({ 'variants.articles._id': objectId });
  
@@ -280,12 +281,13 @@ const deleteProduct = async (req, res) => {
     }
  
     // Remove empty variants
-    product.variants = productModel.variants.filter((v) => v.articles.length > 0);
+    // product.variants = productModel.variants.filter((v) => v.articles.length > 0);
  
     await product.save();
  
     return res.status(200).json({ result: true, message: 'Article deleted' });
   } catch (error) {
+    console.error('deleteProduct error:', error);
     return res.status(500).json({
       result:  false,
       message: 'Failed to delete product',
