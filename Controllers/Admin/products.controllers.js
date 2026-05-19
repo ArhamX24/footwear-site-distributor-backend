@@ -134,13 +134,14 @@ const addProduct = async (req, res) => {
       articleKeywords: artKw,
     };
  
-    // ── Find or create Product → Variant → push article ──────────────────────
     let product = await productModel.findOne({
       segment: { $regex: `^${segment}$`, $options: 'i' },
     });
+
+    // Added Fixes
  
     if (!product) {
-      product = new Product({ segment, variants: [] });
+      product = new productModel({ segment, variants: [] });
     }
  
     const variantName  = variant || 'General';
