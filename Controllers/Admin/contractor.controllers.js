@@ -12,18 +12,18 @@ import QRTracker from "../../Models/QRTracker.model.js";
 
 const generateQRWithLabel = async (qrString, labelData) => {
   try {
-    // ── Canvas dimensions at 300 DPI for 50mm × 35mm sticker ─────────────
+    // ── Canvas dimensions at 300 DPI for exactly 100mm × 50mm sticker ──
     // 1mm = 11.811px at 300dpi
-    const W = 591;  // 50mm
-    const H = 413;  // 35mm
- 
+    const W = 1181;  // 100mm
+    const H = 591;   // 50mm
+
     const canvas = createCanvas(W, H);
     const ctx    = canvas.getContext('2d');
- 
+
     // ── White background ──────────────────────────────────────────────────
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, W, H);
- 
+
     // ── Format sizes as lowestXhighest ───────────────────────────────────
     let sizesText = '';
     if (labelData.sizes) {
@@ -37,73 +37,73 @@ const generateQRWithLabel = async (qrString, labelData) => {
         sizesText = labelData.sizes.trim();
       }
     }
- 
+
     // ── Header text ───────────────────────────────────────────────────────
-    // Font size: ~11px on 591px-wide canvas ≈ readable at 50mm physical
-    const FONT_SIZE  = 22;   // px on canvas (≈ 1.86mm at 300dpi — legible)
-    const LINE_H     = FONT_SIZE + 6;
-    const PADDING    = 10;
- 
+    const FONT_SIZE  = 36;   // Larger font for 100mm width
+    const LINE_H     = FONT_SIZE + 10;
+    const PADDING    = 30;
+
     ctx.fillStyle  = '#000000';
     ctx.font       = `bold ${FONT_SIZE}px Arial`;
     ctx.textAlign  = 'left';
     ctx.textBaseline = 'top';
- 
+
     let yPos = PADDING;
- 
+
     // Article name
     const articleLabel = `Art: ${labelData.articleName || ''}`;
     ctx.fillText(articleLabel, PADDING, yPos);
     yPos += LINE_H;
- 
+
     // Size range
     if (sizesText) {
       const sizeLabel = `Size: ${sizesText}`;
       ctx.fillText(sizeLabel, PADDING, yPos);
       yPos += LINE_H;
     }
- 
-    // ── Thin separator line ───────────────────────────────────────────────
-    yPos += 4;
-    ctx.strokeStyle = '#bbbbbb';
-    ctx.lineWidth   = 1.5;
+
+    // ── Thick separator line ──────────────────────────────────────────────
+    yPos += 10;
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth   = 3;
     ctx.beginPath();
     ctx.moveTo(PADDING, yPos);
     ctx.lineTo(W - PADDING, yPos);
     ctx.stroke();
-    yPos += 6;
- 
-    // ── QR code — fills remaining canvas space ────────────────────────────
-    const qrAreaH = H - yPos - PADDING;   // remaining height
-    const qrSize  = Math.min(W - PADDING * 2, qrAreaH);  // square, fits width
- 
-    // Generate QR at exact pixel size needed — HIGH error correction for small print
+    yPos += 20;
+
+    // ── QR code — perfectly centered in remaining canvas space ────────────
+    const qrAreaH = H - yPos - PADDING;   // exact remaining height
+    const qrSize  = Math.min(W - (PADDING * 2), qrAreaH); 
+
+    // Generate QR at high resolution
     const qrDataURL = await QRCodeLib.toDataURL(qrString, {
       width:                qrSize,
-      margin:               1,          // minimal quiet zone (scanners need ~4 modules)
+      margin:               0,          // Remove inner margins to utilize full space
       color:                { dark: '#000000', light: '#FFFFFF' },
-      errorCorrectionLevel: 'H',        // highest — survives small print size
+      errorCorrectionLevel: 'H',        // Highest survival rate for thermal printers
     });
- 
+
     const qrImage = await loadImage(qrDataURL);
- 
-    // Centre QR horizontally in remaining space
+
+    // Centre QR perfectly on the X-axis
     const qrX = Math.floor((W - qrSize) / 2);
     ctx.drawImage(qrImage, qrX, yPos, qrSize, qrSize);
- 
-    return canvas.toDataURL('image/png');
- 
+
+    return canvas.toDataURL('image/png', 1.0); // Maximum PNG quality
+
   } catch (error) {
     console.error('QR label generation error:', error);
-    // ── Fallback: pure QR, no canvas ─────────────────────────────────────
+    // Fallback
     return await QRCodeLib.toDataURL(qrString, {
-      width:                400,
-      margin:               2,
-      color:                { dark: '#000000', light: '#FFFFFF' },
+      width: 600,
+      margin: 1,
+      color: { dark: '#000000', light: '#FFFFFF' },
       errorCorrectionLevel: 'H',
     });
   }
 };
+
 const trackQRGeneration = async (req, res) => {
   try {
     const { 

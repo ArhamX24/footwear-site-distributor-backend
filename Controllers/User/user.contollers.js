@@ -405,96 +405,138 @@ const fetchArticleDetailsFromInventory = async (req, res) => {
 
 const searchProducts = async (req, res) => {
   try {
-    let { page = 1, limit = 12, search = "", segment = "" } = req.query;
- 
-    const pageNum  = Number(page);
+    let { page = 1, limit = 12, search = "", segment = "", genders = "[]" } = req.query;
+
+    const pageNum = Number(page);
     const limitNum = Number(limit);
-    const skip     = (pageNum - 1) * limitNum;
- 
-    if (!search || !search.trim()) {
+    const skip = (pageNum - 1) * limitNum;
+
+    // Safely parse explicit gender filters from frontend
+    let genderArr = [];
+    try { 
+      genderArr = JSON.parse(genders); 
+    } catch (e) { 
+      genderArr = []; 
+    }
+
+    if (!search && !segment && genderArr.length === 0) {
       return res.status(200).json({
         result: false,
-        message: "Search query required",
+        message: "Search query or filters required",
         data: [],
         pagination: { page: pageNum, limit: limitNum, hasMore: false },
       });
     }
- 
-    // ── Normalise: strip hyphens so "pl-440" matches "pl440" ────────────────
-    const tokenToFlexRegex = (token) =>
-      // Insert optional hyphen between every character
-      token.split("").join("-?");
- 
-    const normalise = (str) =>
-      str.toLowerCase().replace(/-/g, "").replace(/\s+/g, " ").trim();
- 
-    const tokens = normalise(search).split(" ").filter(Boolean);
- 
-    // Each token must match at least one searchable field (AND across tokens)
-    const buildTokenMatch = (token) => {
+
+    const tokenToFlexRegex = (token) => token.split("").join("-?");
+    const normalise = (str) => str.toLowerCase().replace(/-/g, "").replace(/\s+/g, " ").trim();
+    
+    // Split "EVA GENTS" into ["eva", "gents"]
+    const tokens = search ? normalise(search).split(" ").filter(Boolean) : [];
+
+    // ── 1. Match Stage (Top-Level Filtering) ──────────────────────────────────
+    const matchStage = { $and: [] };
+
+    // Strict explicitly selected segment
+    if (segment) {
+      matchStage.$and.push({ segment: { $regex: `^${segment}$`, $options: "i" } });
+    }
+
+    // Strict explicitly selected genders
+    if (genderArr.length > 0) {
+      const genderRegexes = genderArr.map(g => new RegExp(`^${g}$`, "i"));
+      matchStage.$and.push({ "variants.articles.gender": { $in: genderRegexes } });
+    }
+
+    // Search keywords (MUST match all words entered in the box)
+    tokens.forEach((token) => {
       const rx = tokenToFlexRegex(token);
-      return {
+      matchStage.$and.push({
         $or: [
-          { segment:                             { $regex: rx, $options: "i" } },
-          { keywords:                            { $elemMatch: { $regex: rx, $options: "i" } } },
-          { "variants.name":                     { $regex: rx, $options: "i" } },
-          { "variants.keywords":                 { $elemMatch: { $regex: rx, $options: "i" } } },
-          { "variants.articles.name":            { $regex: rx, $options: "i" } },
-          { "variants.articles.gender":          { $regex: rx, $options: "i" } },
-          { "variants.articles.keywords":        { $elemMatch: { $regex: rx, $options: "i" } } },
-          { "variants.articles.articleKeywords": { $elemMatch: { $regex: rx, $options: "i" } } },
-          { "variants.articles.segmentKeywords": { $elemMatch: { $regex: rx, $options: "i" } } },
-          { "variants.articles.variantKeywords": { $elemMatch: { $regex: rx, $options: "i" } } },
-        ],
-      };
-    };
- 
-    const matchStage = {
-      $and: [
-        // Scope to active segment pill if provided
-        ...(segment
-          ? [{ segment: { $regex: `^${segment}$`, $options: "i" } }]
-          : []),
-        // ALL tokens must match somewhere in the document
-        ...tokens.map(buildTokenMatch),
-      ],
-    };
- 
-    // Build per-token article-level $or conditions for the $filter stage
-    // (article survives if it matches at least one token at article/variant/segment level)
-    const articleFilterOr = tokens.flatMap((token) => {
-      const rx = tokenToFlexRegex(token);
-      return [
-        { $regexMatch: { input: "$$article.name",   regex: rx, options: "i" } },
-        // gender is stored as [String] — check if any element matches
-        {
-          $gt: [
-            {
-              $size: {
-                $filter: {
-                  input: { $ifNull: ["$$article.gender", []] },
-                  as: "g",
-                  cond: { $regexMatch: { input: "$$g", regex: rx, options: "i" } },
-                },
-              },
-            },
-            0,
-          ],
-        },
-        { $regexMatch: { input: "$segment",       regex: rx, options: "i" } },
-        { $regexMatch: { input: "$$variant.name", regex: rx, options: "i" } },
-      ];
+          { segment: { $regex: rx, $options: "i" } },
+          { keywords: { $regex: rx, $options: "i" } },
+          { "variants.name": { $regex: rx, $options: "i" } },
+          { "variants.keywords": { $regex: rx, $options: "i" } },
+          { "variants.articles.name": { $regex: rx, $options: "i" } },
+          { "variants.articles.gender": { $regex: rx, $options: "i" } },
+          { "variants.articles.articleKeywords": { $regex: rx, $options: "i" } },
+          { "variants.articles.segmentKeywords": { $regex: rx, $options: "i" } },
+          { "variants.articles.variantKeywords": { $regex: rx, $options: "i" } }
+        ]
+      });
     });
- 
+
+    const finalMatch = matchStage.$and.length > 0 ? matchStage : {};
+
+    // ── 2. Article-Level Strict Filtering ──────────────────────────────────────
+    const articleFilterAnd = [];
+
+    // Articles MUST match the selected UI gender filters
+    if (genderArr.length > 0) {
+      articleFilterAnd.push({
+        $gt: [
+          {
+            $size: {
+              $filter: {
+                input: { $ifNull: ["$$article.gender", []] },
+                as: "g",
+                cond: { $in: [{ $toLower: "$$g" }, genderArr.map(g => g.toLowerCase())] }
+              }
+            }
+          },
+          0
+        ]
+      });
+    }
+
+    // Articles MUST match ALL space-separated search words (e.g. "EVA" AND "GENTS")
+    tokens.forEach((token) => {
+      const rx = tokenToFlexRegex(token);
+      articleFilterAnd.push({
+        $or: [
+          { $regexMatch: { input: { $ifNull: ["$$article.name", ""] }, regex: rx, options: "i" } },
+          { $regexMatch: { input: { $ifNull: ["$segment", ""] }, regex: rx, options: "i" } },
+          { $regexMatch: { input: { $ifNull: ["$$variant.name", ""] }, regex: rx, options: "i" } },
+          {
+            $gt: [
+              {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$$article.gender", []] },
+                    as: "g",
+                    cond: { $regexMatch: { input: "$$g", regex: rx, options: "i" } }
+                  }
+                }
+              },
+              0
+            ]
+          },
+          {
+            $gt: [
+              {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$$article.articleKeywords", []] },
+                    as: "kw",
+                    cond: { $regexMatch: { input: "$$kw", regex: rx, options: "i" } }
+                  }
+                }
+              },
+              0
+            ]
+          }
+        ]
+      });
+    });
+
+    const articleCond = articleFilterAnd.length > 0 ? { $and: articleFilterAnd } : true;
+
     const pipeline = [
-      // ── 1. MATCH FIRST (fixes "Croxxy always on top" bug) ────────────────
-      { $match: matchStage },
- 
-      // ── 2. Paginate AFTER matching ────────────────────────────────────────
+      { $match: finalMatch },
       { $skip: skip },
       { $limit: limitNum },
- 
-      // ── 3. Keep only articles that are relevant to the search ─────────────
+
+      // Filter deeply nested articles to remove mismatches
       {
         $addFields: {
           variants: {
@@ -502,42 +544,42 @@ const searchProducts = async (req, res) => {
               input: "$variants",
               as: "variant",
               in: {
-                name:     "$$variant.name",
+                name: "$$variant.name",
                 keywords: "$$variant.keywords",
                 articles: {
                   $filter: {
                     input: "$$variant.articles",
-                    as:    "article",
-                    cond:  { $or: articleFilterOr },
-                  },
-                },
-              },
-            },
-          },
-        },
+                    as: "article",
+                    cond: articleCond
+                  }
+                }
+              }
+            }
+          }
+        }
       },
- 
-      // ── 4. Drop variants that have no matching articles ───────────────────
+
+      // Drop variants that became empty because no articles matched
       {
         $addFields: {
           variants: {
             $filter: {
               input: "$variants",
-              as:    "v",
-              cond:  { $gt: [{ $size: "$$v.articles" }, 0] },
-            },
-          },
-        },
+              as: "v",
+              cond: { $gt: [{ $size: "$$v.articles" }, 0] }
+            }
+          }
+        }
       },
       { $match: { "variants.0": { $exists: true } } },
- 
-      // ── 5. Inventory lookup ───────────────────────────────────────────────
+
+      // ── 3. Inventory lookup (Unchanged) ─────────────────────────────────────
       {
         $lookup: {
-          from:         "inventories",
-          localField:   "_id",
+          from: "inventories",
+          localField: "_id",
           foreignField: "productId",
-          as:           "inventoryData",
+          as: "inventoryData",
         },
       },
       {
@@ -545,16 +587,16 @@ const searchProducts = async (req, res) => {
           variants: {
             $map: {
               input: "$variants",
-              as:    "variant",
+              as: "variant",
               in: {
                 name: "$$variant.name",
                 articles: {
                   $map: {
                     input: "$$variant.articles",
-                    as:    "article",
+                    as: "article",
                     in: {
-                      _id:    "$$article._id",
-                      name:   "$$article.name",
+                      _id: "$$article._id",
+                      name: "$$article.name",
                       images: "$$article.images",
                       gender: "$$article.gender",
                       hasInventory: {
@@ -563,8 +605,8 @@ const searchProducts = async (req, res) => {
                             $size: {
                               $filter: {
                                 input: { $ifNull: [{ $arrayElemAt: ["$inventoryData.items", 0] }, []] },
-                                as:    "inv",
-                                cond:  { $eq: ["$$inv.articleName", "$$article.name"] },
+                                as: "inv",
+                                cond: { $eq: ["$$inv.articleName", "$$article.name"] },
                               },
                             },
                           },
@@ -581,18 +623,18 @@ const searchProducts = async (req, res) => {
       },
       { $unset: "inventoryData" },
     ];
- 
+
     const results = await productModel.aggregate(pipeline);
- 
+
     return res.status(200).json({
-      result:  !!results.length,
+      result: !!results.length,
       message: results.length ? "Products found" : "No matches",
-      data:    results,
+      data: results,
       pagination: {
-        page:    pageNum,
-        limit:   limitNum,
+        page: pageNum,
+        limit: limitNum,
         hasMore: results.length === limitNum,
-        count:   results.length,
+        count: results.length,
       },
     });
   } catch (err) {
