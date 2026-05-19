@@ -162,7 +162,6 @@ const addProduct = async (req, res) => {
       message: 'Product added successfully',
     });
   } catch (error) {
-    console.error('addProduct error:', error);
     return res.status(500).json({
       result:  false,
       message: 'Failed to add product',
