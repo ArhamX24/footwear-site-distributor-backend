@@ -13,7 +13,7 @@ import QRTracker from "../../Models/QRTracker.model.js";
 const generateQRWithLabel = async (qrString, labelData) => {
   try {
     // ── Canvas dimensions at 300 DPI for exactly 100mm × 50mm sticker ──
-    // 1mm = 11.811px at 300dpi
+    // Keep canvas 100x50 so printer knows the paper size, but we will pad the inside.
     const W = 1181;  // 100mm
     const H = 591;   // 50mm
 
@@ -38,50 +38,59 @@ const generateQRWithLabel = async (qrString, labelData) => {
       }
     }
 
-    // ── Header text ───────────────────────────────────────────────────────
-    const FONT_SIZE  = 36;   // Larger font for 100mm width
+    // ── Header text (CENTERED) ────────────────────────────────────────────
+    const FONT_SIZE  = 36;   
     const LINE_H     = FONT_SIZE + 10;
-    const PADDING    = 30;
+    
+    // Create the "90mm" safe zone width by adding ~60px padding on left and right
+    const SAFE_PADDING_X = 60; 
+    const PADDING_TOP = 25;    
 
     ctx.fillStyle  = '#000000';
     ctx.font       = `bold ${FONT_SIZE}px Arial`;
-    ctx.textAlign  = 'left';
+    // ✅ FIX: Center the text
+    ctx.textAlign  = 'center';
     ctx.textBaseline = 'top';
 
-    let yPos = PADDING;
+    let yPos = PADDING_TOP;
+    const centerX = W / 2; // Exact middle of the label
 
-    // Article name
+    // Article name (Centered)
     const articleLabel = `Art: ${labelData.articleName || ''}`;
-    ctx.fillText(articleLabel, PADDING, yPos);
+    ctx.fillText(articleLabel, centerX, yPos);
     yPos += LINE_H;
 
-    // Size range
+    // Size range (Centered)
     if (sizesText) {
       const sizeLabel = `Size: ${sizesText}`;
-      ctx.fillText(sizeLabel, PADDING, yPos);
+      ctx.fillText(sizeLabel, centerX, yPos);
       yPos += LINE_H;
     }
 
-    // ── Thick separator line ──────────────────────────────────────────────
+    // ── Thick separator line (Respecting 90mm safe zone) ──────────────────
     yPos += 10;
     ctx.strokeStyle = '#000000';
     ctx.lineWidth   = 3;
     ctx.beginPath();
-    ctx.moveTo(PADDING, yPos);
-    ctx.lineTo(W - PADDING, yPos);
+    ctx.moveTo(SAFE_PADDING_X, yPos);
+    ctx.lineTo(W - SAFE_PADDING_X, yPos);
     ctx.stroke();
     yPos += 20;
 
-    // ── QR code — perfectly centered in remaining canvas space ────────────
-    const qrAreaH = H - yPos - PADDING;   // exact remaining height
-    const qrSize  = Math.min(W - (PADDING * 2), qrAreaH); 
+    // ── QR code — Centered and optimized for Thermal Printing ─────────────
+    // Calculate remaining height with a bottom safe margin
+    const qrAreaH = H - yPos - 20; 
+    const maxQrW  = W - (SAFE_PADDING_X * 2);
+    const qrSize  = Math.min(maxQrW, qrAreaH); 
 
-    // Generate QR at high resolution
+    // ✅ CRITICAL FIX FOR SCANNABILITY: 
+    // Changed errorCorrectionLevel from 'H' to 'M'. 
+    // This makes the individual black squares LARGER so the thermal printer doesn't smudge them together.
     const qrDataURL = await QRCodeLib.toDataURL(qrString, {
       width:                qrSize,
-      margin:               0,          // Remove inner margins to utilize full space
+      margin:               0,          
       color:                { dark: '#000000', light: '#FFFFFF' },
-      errorCorrectionLevel: 'H',        // Highest survival rate for thermal printers
+      errorCorrectionLevel: 'M', // <-- Crucial for thermal printers
     });
 
     const qrImage = await loadImage(qrDataURL);
@@ -90,16 +99,15 @@ const generateQRWithLabel = async (qrString, labelData) => {
     const qrX = Math.floor((W - qrSize) / 2);
     ctx.drawImage(qrImage, qrX, yPos, qrSize, qrSize);
 
-    return canvas.toDataURL('image/png', 1.0); // Maximum PNG quality
+    return canvas.toDataURL('image/png', 1.0); 
 
   } catch (error) {
     console.error('QR label generation error:', error);
-    // Fallback
     return await QRCodeLib.toDataURL(qrString, {
       width: 600,
       margin: 1,
       color: { dark: '#000000', light: '#FFFFFF' },
-      errorCorrectionLevel: 'H',
+      errorCorrectionLevel: 'M',
     });
   }
 };
