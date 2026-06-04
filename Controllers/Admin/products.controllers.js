@@ -309,11 +309,11 @@ const updateProduct = async (req, res) => {
       variantKeywords,
       articleKeywords,
     } = req.body;
- 
+
     if (!articleId) {
       return res.status(400).json({ result: false, message: 'articleId is required' });
     }
- 
+
     // ── Parse colors ──────────────────────────────────────────────────────────
     let colorsRaw = req.body.colors;
     let colorsArr = [];
@@ -321,29 +321,22 @@ const updateProduct = async (req, res) => {
       if (Array.isArray(colorsRaw)) {
         colorsArr = colorsRaw.map((c) => c.trim().toLowerCase()).filter(Boolean);
       } else {
-        colorsArr = colorsRaw
-          .split(',')
-          .map((c) => c.trim().toLowerCase())
-          .filter(Boolean);
+        colorsArr = colorsRaw.split(',').map((c) => c.trim().toLowerCase()).filter(Boolean);
       }
     }
- 
+
     // ── Parse gender ──────────────────────────────────────────────────────────
     let genderArr = [];
     if (gender) {
       genderArr = Array.isArray(gender) ? gender : [gender];
     }
- 
+
     // ── Parse keywords ────────────────────────────────────────────────────────
-    const parseKw = (raw) =>
-      raw
-        ? raw.split(',').map((k) => k.trim().toLowerCase()).filter(Boolean)
-        : [];
- 
+    const parseKw = (raw) => raw ? raw.split(',').map((k) => k.trim().toLowerCase()).filter(Boolean) : [];
     const segKw = parseKw(segmentKeywords);
     const varKw = parseKw(variantKeywords);
     const artKw = parseKw(articleKeywords);
- 
+
     // ── Keep existing images + upload new ones ────────────────────────────────
     let keptImages = [];
     try {
@@ -351,82 +344,140 @@ const updateProduct = async (req, res) => {
     } catch {
       keptImages = [];
     }
- 
+
     let newImageUrls = [];
     if (req.files && req.files.length > 0) {
       const results = await Promise.all(
         req.files.map((f) => uploadOnImgBB(f.path))
       );
-      newImageUrls = results
-        .filter((r) => r?.secure_url)
-        .map((r) => r.secure_url);
+      newImageUrls = results.filter((r) => r?.secure_url).map((r) => r.secure_url);
     }
- 
+
     const finalImages = [...keptImages, ...newImageUrls];
- 
+
     if (finalImages.length === 0) {
-      return res.status(400).json({
-        result:  false,
-        message: 'At least one image is required',
-      });
+      return res.status(400).json({ result: false, message: 'At least one image is required' });
     }
- 
+
     // ── Find the product containing this article ──────────────────────────────
     const mongoose = await import('mongoose');
     const objectId = new mongoose.default.Types.ObjectId(articleId);
- 
-    const product = await productModel.findOne({
+    
+    // Import your model (ensure you are requiring/importing productModel at the top of your file)
+    // const productModel = require('../models/Product'); 
+
+    const oldProduct = await productModel.findOne({
       'variants.articles._id': objectId,
     });
- 
-    if (!product) {
+
+    if (!oldProduct) {
       return res.status(404).json({ result: false, message: 'Article not found' });
     }
- 
-    // ── Locate and update the article inside nested arrays ────────────────────
-    let updated = false;
-    for (const variant of product.variants) {
-      const article = variant.articles.id(objectId);
-      if (article) {
-        article.name            = name            || article.name;
-        article.gender          = genderArr.length ? genderArr : article.gender;
-        article.colors          = colorsArr;           // ✅ always overwrite (even empty = clear)
-        article.images          = finalImages;
-        article.segmentKeywords = segKw;
-        article.variantKeywords = varKw;
-        article.articleKeywords = artKw;
- 
-        // Update variant name if changed
-        if (variantName && variant.name !== variantName) {
-          variant.name = variantName;
-        }
- 
-        // Update segment if changed
-        if (segment && product.segment !== segment) {
-          product.segment = segment;
-        }
- 
-        updated = true;
+
+    // ── Locate the article inside nested arrays ───────────────────────────────
+    let oldVariant = null;
+    let articleDoc = null;
+
+    for (const variant of oldProduct.variants) {
+      const foundArticle = variant.articles.id(objectId);
+      if (foundArticle) {
+        oldVariant = variant;
+        articleDoc = foundArticle;
         break;
       }
     }
- 
-    if (!updated) {
+
+    if (!articleDoc) {
       return res.status(404).json({ result: false, message: 'Article not found in variants' });
     }
- 
-    await product.save();
- 
+
+    // ── Update article data in memory ─────────────────────────────────────────
+    articleDoc.name = name || articleDoc.name;
+    articleDoc.gender = genderArr.length ? genderArr : articleDoc.gender;
+    articleDoc.colors = colorsArr; 
+    articleDoc.images = finalImages;
+    articleDoc.segmentKeywords = segKw;
+    articleDoc.variantKeywords = varKw;
+    articleDoc.articleKeywords = artKw;
+
+    // ── Check if we need to MOVE the article ──────────────────────────────────
+    const targetSegment = segment ? segment.trim() : oldProduct.segment;
+    const targetVariantName = variantName ? variantName.trim() : oldVariant.name;
+
+    const segmentChanged = targetSegment !== oldProduct.segment;
+    const variantChanged = targetVariantName !== oldVariant.name;
+
+    if (!segmentChanged && !variantChanged) {
+      // SCENARIO 1: No structural movement needed. Just save the updated article.
+      await oldProduct.save();
+    } 
+    else if (!segmentChanged && variantChanged) {
+      // SCENARIO 2: Segment is the same, but Category (variant) changed.
+      const articleObj = articleDoc.toObject(); // Copy the article data
+      oldVariant.articles.pull(objectId);       // Remove from old category
+
+      // Clean up empty category
+      if (oldVariant.articles.length === 0) {
+        oldProduct.variants.pull(oldVariant._id);
+      }
+
+      // Find or create the new category inside the SAME segment
+      let targetVariant = oldProduct.variants.find(v => v.name === targetVariantName);
+      if (targetVariant) {
+        targetVariant.articles.push(articleObj);
+      } else {
+        oldProduct.variants.push({ name: targetVariantName, articles: [articleObj] });
+      }
+
+      await oldProduct.save();
+    } 
+    else {
+      // SCENARIO 3: Segment changed (Moving to a completely different product document)
+      const articleObj = articleDoc.toObject(); // Copy the article data
+      oldVariant.articles.pull(objectId);       // Remove from old category
+
+      // Clean up empty category and/or empty product document
+      if (oldVariant.articles.length === 0) {
+        oldProduct.variants.pull(oldVariant._id);
+      }
+      if (oldProduct.variants.length === 0) {
+        await oldProduct.deleteOne(); // Delete the document if it's entirely empty now
+      } else {
+        await oldProduct.save();      // Otherwise save the old document
+      }
+
+      // Find or create the NEW segment document
+      let targetProduct = await productModel.findOne({ segment: targetSegment });
+      
+      if (!targetProduct) {
+        // Create brand new segment and category
+        targetProduct = new productModel({
+          segment: targetSegment,
+          variants: [{ name: targetVariantName, articles: [articleObj] }]
+        });
+      } else {
+        // Segment exists, find or create the category inside it
+        let targetVariant = targetProduct.variants.find(v => v.name === targetVariantName);
+        if (targetVariant) {
+          targetVariant.articles.push(articleObj);
+        } else {
+          targetProduct.variants.push({ name: targetVariantName, articles: [articleObj] });
+        }
+      }
+      await targetProduct.save();
+    }
+
     return res.status(200).json({
-      result:  true,
+      result: true,
       message: 'Product updated successfully',
     });
+
   } catch (error) {
     console.error('updateProduct error:', error);
     return res.status(500).json({
-      result:  false,
+      result: false,
       message: 'Failed to update product',
-      error:   error.message,
+      error: error.message,
     });
   }
 };

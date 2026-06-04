@@ -8,14 +8,23 @@ import PDFDocument from 'pdfkit';
 import mongoose from "mongoose";
 import stream from "stream"
 import QRTracker from "../../Models/QRTracker.model.js";
+import { fileURLToPath } from "url";
+import path from "path";
+
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
+
+// const logoPath = path.resolve(__dirname, '../../Public/logo.png') 
+
+
 
 
 const generateQRWithLabel = async (qrString, labelData) => {
   try {
-    // ── Canvas dimensions at 300 DPI for exactly 100mm × 50mm sticker ──
-    // Keep canvas 100x50 so printer knows the paper size, but we will pad the inside.
-    const W = 1181;  // 100mm
-    const H = 591;   // 50mm
+    // ── Standard Landscape 100mm × 50mm ──
+    const W = 1181;  // 100mm width
+    const H = 591;   // 50mm height
 
     const canvas = createCanvas(W, H);
     const ctx    = canvas.getContext('2d');
@@ -24,7 +33,7 @@ const generateQRWithLabel = async (qrString, labelData) => {
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, W, H);
 
-    // ── Format sizes as lowestXhighest ───────────────────────────────────
+    // ── Format sizes ──────────────────────────────────────────────────────
     let sizesText = '';
     if (labelData.sizes) {
       if (Array.isArray(labelData.sizes) && labelData.sizes.length > 0) {
@@ -38,66 +47,96 @@ const generateQRWithLabel = async (qrString, labelData) => {
       }
     }
 
-    // ── Header text (CENTERED) ────────────────────────────────────────────
-    const FONT_SIZE  = 36;   
-    const LINE_H     = FONT_SIZE + 10;
-    
-    // Create the "90mm" safe zone width by adding ~60px padding on left and right
-    const SAFE_PADDING_X = 60; 
-    const PADDING_TOP = 25;    
+    // ── 1. LAYOUT DIMENSIONS ──────────────────────────────────────────────
+    // Make the QR code MASSIVE (550px out of 591px height)
+    const qrSize = 550; 
+    const qrX = Math.floor((W - qrSize) / 2); 
+    const qrY = Math.floor((H - qrSize) / 2);
 
-    ctx.fillStyle  = '#000000';
-    ctx.font       = `bold ${FONT_SIZE}px Arial`;
-    // ✅ FIX: Center the text
-    ctx.textAlign  = 'center';
-    ctx.textBaseline = 'top';
-
-    let yPos = PADDING_TOP;
-    const centerX = W / 2; // Exact middle of the label
-
-    // Article name (Centered)
-    const articleLabel = `Art: ${labelData.articleName || ''}`;
-    ctx.fillText(articleLabel, centerX, yPos);
-    yPos += LINE_H;
-
-    // Size range (Centered)
-    if (sizesText) {
-      const sizeLabel = `Size: ${sizesText}`;
-      ctx.fillText(sizeLabel, centerX, yPos);
-      yPos += LINE_H;
+    // ── 2. DRAW LOGO (Left Column - Rotated Sideways) ─────────────────────
+    try {
+      const logoPath = path.resolve(__dirname, '../../Public/logo.png') 
+      const logoImage = await loadImage(logoPath);
+      
+      const logoMaxW = 400; // Max width for local sideways space
+      const logoMaxH = 260; // Max height for local sideways space
+      
+      const ratio = Math.min(logoMaxW / logoImage.width, logoMaxH / logoImage.height);
+      const logoW = logoImage.width * ratio;
+      const logoH = logoImage.height * ratio;
+      
+      ctx.save();
+      // Move to the center of the left blank space
+      ctx.translate(qrX / 2, H / 2);
+      ctx.rotate(-Math.PI / 2); // Rotate 90 degrees counter-clockwise
+      
+      // Draw centered in the rotated space
+      ctx.drawImage(logoImage, -logoW / 2, -logoH / 2, logoW, logoH);
+      ctx.restore();
+    } catch (logoErr) {
+      console.warn('Could not load logo:', logoErr.message);
     }
 
-    // ── Thick separator line (Respecting 90mm safe zone) ──────────────────
-    yPos += 10;
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth   = 3;
-    ctx.beginPath();
-    ctx.moveTo(SAFE_PADDING_X, yPos);
-    ctx.lineTo(W - SAFE_PADDING_X, yPos);
-    ctx.stroke();
-    yPos += 20;
-
-    // ── QR code — Centered and optimized for Thermal Printing ─────────────
-    // Calculate remaining height with a bottom safe margin
-    const qrAreaH = H - yPos - 20; 
-    const maxQrW  = W - (SAFE_PADDING_X * 2);
-    const qrSize  = Math.min(maxQrW, qrAreaH); 
-
-    // ✅ CRITICAL FIX FOR SCANNABILITY: 
-    // Changed errorCorrectionLevel from 'H' to 'M'. 
-    // This makes the individual black squares LARGER so the thermal printer doesn't smudge them together.
+    // ── 3. DRAW QR CODE (Center Column) ───────────────────────────────────
     const qrDataURL = await QRCodeLib.toDataURL(qrString, {
       width:                qrSize,
       margin:               0,          
       color:                { dark: '#000000', light: '#FFFFFF' },
-      errorCorrectionLevel: 'M', // <-- Crucial for thermal printers
+      errorCorrectionLevel: 'M', 
     });
 
     const qrImage = await loadImage(qrDataURL);
+    ctx.drawImage(qrImage, qrX, qrY, qrSize, qrSize);
 
-    // Centre QR perfectly on the X-axis
-    const qrX = Math.floor((W - qrSize) / 2);
-    ctx.drawImage(qrImage, qrX, yPos, qrSize, qrSize);
+    // ── 4. DRAW ROTATED TEXT (Right Column) ───────────────────────────────
+    // Find the center of the right blank space
+    const rightCenterX = qrX + qrSize + ((W - (qrX + qrSize)) / 2);
+    const rightCenterY = H / 2;
+
+    ctx.save();
+    ctx.translate(rightCenterX, rightCenterY);
+    ctx.rotate(-Math.PI / 2); // Rotate 90 degrees counter-clockwise
+
+    ctx.fillStyle    = '#000000';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+
+    const artText = `Art Name - ${labelData.articleName || ''}`;
+    const sizeText = sizesText ? `Size - ${sizesText}` : '';
+
+    // Text max width is bounded by sticker height
+    const maxTextWidth = H - 60; 
+
+    let fontSize = 48;
+    ctx.font = `bold ${fontSize}px Arial`;
+    
+    let artWidth = ctx.measureText(artText).width;
+    if (artWidth > maxTextWidth) {
+      fontSize = Math.floor(fontSize * (maxTextWidth / artWidth));
+    }
+
+    if (sizeText) {
+      ctx.font = `bold ${fontSize}px Arial`;
+      // -35 pushes it left (closer to the QR code)
+      ctx.fillText(artText, 0, -35); 
+      
+      let sizeFontSize = 48;
+      ctx.font = `bold ${sizeFontSize}px Arial`;
+      let sizeWidth = ctx.measureText(sizeText).width;
+      
+      if (sizeWidth > maxTextWidth) {
+        sizeFontSize = Math.floor(sizeFontSize * (maxTextWidth / sizeWidth));
+        ctx.font = `bold ${sizeFontSize}px Arial`;
+      }
+      
+      // +35 pushes it right (closer to the outer edge of the sticker)
+      ctx.fillText(sizeText, 0, 35); 
+    } else {
+      ctx.font = `bold ${fontSize}px Arial`;
+      ctx.fillText(artText, 0, 0);
+    }
+
+    ctx.restore();
 
     return canvas.toDataURL('image/png', 1.0); 
 
